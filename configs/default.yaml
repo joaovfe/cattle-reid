@@ -1,0 +1,47 @@
+# Cattle Re-ID Drone — config padrão
+# Para acurácia >95%: treine YOLO no seu dataset de gado, use --gt_count para métricas
+# e ajuste conf_threshold / similarity_threshold com base em validação.
+
+app:
+  env: development
+  log_level: INFO
+
+database:
+  url: postgresql+asyncpg://cattle:cattle@localhost:5432/cattle_reid
+  echo: false
+
+models:
+  yolo:
+    weights: yolo11n.pt  # yolo11n.pt (default), yolo11s.pt (mais preciso), ou path customizado
+    conf_threshold: 0.55   # >0.5 para maior precisão (menos falsos positivos)
+    iou_threshold: 0.45
+    max_det: 300
+    half: true  # fp16 para GPU, mais rápido
+  embedding:
+    # DINOv2 (livre). DINOv3 (facebook/dinov3-vits16-pretrain-lvd1689m) é gated: requer login HF e aceite de licença.
+    model_name: facebook/dinov2-small
+    device: cuda
+    output_size: 384
+    half: true
+  faiss:
+    index_path: ./core/data/faiss_index
+    metric_type: cosine  # cosine or l2
+
+tracking:
+  tracker: bytetrack  # bytetrack or deepsort
+  max_age: 30
+  iou_threshold: 0.3
+
+reid:
+  similarity_threshold: 0.25  # >0 para mais assertivo (rejeitar matches fracos)
+  min_embeddings_per_tracklet: 4  # mais embeddings = decisão mais estável
+  aggregate: mean
+
+oriented_crop:
+  output_size: 224
+  padding: 0.1  # fraction of bbox
+
+inference:
+  frame_skip: 1  # process every N frames
+  batch_embedding: true
+  batch_size: 16

@@ -1,0 +1,7 @@
+# YOLO training config (cattle detection)
+data: data.yaml  # path to dataset root data.yaml
+model: yolov8n.pt
+epochs: 100
+batch: 16
+imgsz: 640
+patience: 20

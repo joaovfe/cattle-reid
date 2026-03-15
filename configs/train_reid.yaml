@@ -1,0 +1,9 @@
+# Re-ID training (BECA-D / OpenCows2020 style)
+data_root: null  # set to BECA-D or OpenCows2020 root (train/ val/ with class dirs)
+encoder: facebook/dinov2-small
+epochs: 30
+lr: 1.0e-4
+batch_size: 32
+output_dir: data/checkpoints/reid
+# Threshold τ = μ - 2σ computed on validation positive/negative pairs
+compute_threshold: true
