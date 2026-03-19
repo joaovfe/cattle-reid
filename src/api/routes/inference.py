@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from pathlib import Path
 from collections import defaultdict
 
 import numpy as np
@@ -13,18 +14,63 @@ from fastapi import APIRouter, Request, UploadFile, File, HTTPException, Query
 router = APIRouter()
 
 
-def _get_inference_components():
+def _get_inference_components(request: Request):
+    config = getattr(request.app.state, "config", {}) or {}
+    models_cfg = config.get("models", {})
+    yolo_cfg = models_cfg.get("yolo", {}) or {}
+    cls_cfg = models_cfg.get("classifier", {}) or {}
+    emb_cfg = models_cfg.get("embedding", {}) or {}
+    track_cfg = config.get("tracking", {}) or {}
+    reid_cfg = config.get("reid", {}) or {}
+    crop_cfg = config.get("oriented_crop", {}) or {}
+
     from src.ai.detection.yolo_detector import YOLOCattleDetector
     from src.ai.tracking.bytetrack_tracker import ByteTrackTracker, TrackerConfig
     from src.ai.oriented_crop.cropper import OrientedCropper
     from src.ai.embedding.dino_encoder import CattleEmbeddingEncoder, DINOV2_SMALL
     from src.ai.reid.identity_decision import IdentityDecision, aggregate_embeddings
-    detector = YOLOCattleDetector(conf_threshold=0.55, iou_threshold=0.45, half=True)
-    tracker = ByteTrackTracker(TrackerConfig(max_age=30, iou_threshold=0.3))
-    cropper = OrientedCropper(224, 0.1)
-    encoder = CattleEmbeddingEncoder(model_name=DINOV2_SMALL, half=True)
-    decision = IdentityDecision(similarity_threshold=0.25, min_embeddings_per_tracklet=4)
-    return detector, tracker, cropper, encoder, decision
+
+    from core.config import resolve_path
+
+    detector = YOLOCattleDetector(
+        model_path=resolve_path(yolo_cfg.get("weights")),
+        conf_threshold=float(yolo_cfg.get("conf_threshold", 0.55)),
+        iou_threshold=float(yolo_cfg.get("iou_threshold", 0.45)),
+        max_det=int(yolo_cfg.get("max_det", 300)),
+        device=yolo_cfg.get("device"),
+        half=bool(yolo_cfg.get("half", True)),
+    )
+    classifier = None
+    if cls_cfg.get("weights"):
+        backend = str(cls_cfg.get("backend", "ultralytics")).lower()
+        if backend == "ultralytics":
+            from src.ai.classification.ultralytics_classifier import UltralyticsImageClassifier
+
+            classifier = UltralyticsImageClassifier(
+                model_path=resolve_path(cls_cfg.get("weights")) or str(cls_cfg.get("weights")),
+                device=cls_cfg.get("device"),
+                half=bool(cls_cfg.get("half", True)),
+            )
+    tracker = ByteTrackTracker(
+        TrackerConfig(
+            max_age=int(track_cfg.get("max_age", 30)),
+            iou_threshold=float(track_cfg.get("iou_threshold", 0.3)),
+        )
+    )
+    cropper = OrientedCropper(
+        int(crop_cfg.get("output_size", 224)),
+        float(crop_cfg.get("padding", 0.1)),
+    )
+    encoder = CattleEmbeddingEncoder(
+        model_name=str(emb_cfg.get("model_name", DINOV2_SMALL)),
+        device=emb_cfg.get("device"),
+        half=bool(emb_cfg.get("half", True)),
+    )
+    decision = IdentityDecision(
+        similarity_threshold=float(reid_cfg.get("similarity_threshold", 0.25)),
+        min_embeddings_per_tracklet=int(reid_cfg.get("min_embeddings_per_tracklet", 4)),
+    )
+    return detector, classifier, tracker, cropper, encoder, decision
 
 
 @router.post("/video")
@@ -53,10 +99,15 @@ async def inference_video(
                 pass
         raise HTTPException(status_code=400, detail=f"Invalid video: {e}") from e
 
-    detector, tracker, cropper, encoder, decision = _get_inference_components()
+    detector, classifier, tracker, cropper, encoder, decision = _get_inference_components(request)
     store = request.app.state.faiss_store
 
+    config = getattr(request.app.state, "config", {}) or {}
+    crops_per_tracklet = int(config.get("inference", {}).get("crops_per_tracklet", 3))
+
     tracklet_embeddings: dict[int, list[np.ndarray]] = defaultdict(list)
+    tracklet_classifications: dict[int, list[dict[str, float | str]]] = defaultdict(list)
+    tracklet_crops: dict[int, list[dict[str, object]]] = defaultdict(list)
     frame_detections: dict[int, list[tuple[list[float], int]]] = {}
     frame_skip = 1
     frame_idx = 0
@@ -73,17 +124,29 @@ async def inference_video(
         tracked = tracker.update(det_list)
         frame_detections[frame_idx] = [(det["bbox"], det["track_id"]) for det in tracked if det.get("track_id")]
         batch = []
+        cls_batch = []
         for det in tracked:
             tid = det.get("track_id")
             if tid is None:
                 continue
             crop = cropper.crop(frame, det["bbox"])
             batch.append((tid, crop))
+            if classifier is not None:
+                cls_batch.append((tid, crop))
+            if crops_per_tracklet > 0 and len(tracklet_crops[int(tid)]) < crops_per_tracklet:
+                tracklet_crops[int(tid)].append(
+                    {"crop_bgr": crop, "frame_index": int(frame_idx), "bbox": det.get("bbox")}
+                )
         if batch:
             tids, crops = zip(*batch)
             embs = encoder.encode_batch(list(crops))
             for i, tid in enumerate(tids):
                 tracklet_embeddings[tid].append(embs[i])
+        if classifier is not None and cls_batch:
+            cls_tids, cls_crops = zip(*cls_batch)
+            preds = classifier.predict_batch(list(cls_crops))
+            for tid, p in zip(cls_tids, preds):
+                tracklet_classifications[tid].append({"label": p.label, "score": float(p.score)})
         frame_idx += 1
 
     cap.release()
@@ -94,11 +157,13 @@ async def inference_video(
             pass
 
     results = []
+    aggregated_by_tid: dict[int, np.ndarray] = {}
     for tid, embs in tracklet_embeddings.items():
         if len(embs) < decision.min_embeddings_per_tracklet:
             results.append({"track_id": tid, "animal_id": None, "score": 0.0, "num_embeddings": len(embs)})
             continue
         agg = aggregate_embeddings(embs)
+        aggregated_by_tid[int(tid)] = agg
         animal_id, score = decision.decide(agg, store, top_k=5)
         results.append({"track_id": tid, "animal_id": animal_id, "score": float(score), "num_embeddings": len(embs)})
 
@@ -108,20 +173,127 @@ async def inference_video(
     if save_db:
         from core.database.session import async_session_factory
         from core.database.inference_persistence import save_inference_results
+        from core.database.auto_enroll import auto_enroll_unknown_tracklets
+        from core.config import repo_root
+
         async with async_session_factory() as session:
+            auto_enrolled = await auto_enroll_unknown_tracklets(
+                session=session,
+                store=store,
+                tracklet_results=results,
+                tracklet_aggregated_embeddings=aggregated_by_tid,
+                video_source=file.filename or "upload",
+            )
+
+            # Persist a few crops per tracklet/animal on disk + DB.
+            crops_payload: list[dict[str, object]] = []
+            events_payload: list[dict[str, object]] = []
+            crops_dir = repo_root() / "core" / "data" / "crops"
+            crops_dir.mkdir(parents=True, exist_ok=True)
+
+            # build mapping track_id -> tracklet_id after save_inference_results (needs tracklets)
             await save_inference_results(
                 session,
                 file.filename or "upload",
                 results,
                 frame_detections,
-                metrics={"count": count, "unique_identified": unique_identified},
+                metrics={
+                    "count": count,
+                    "unique_identified": unique_identified,
+                    "classification": {"enabled": classifier is not None},
+                    "auto_enroll": {"created": len(auto_enrolled)},
+                },
+                animal_crops=[],
+                extra_events=[],
+            )
+
+            # Tracklets are created above; fetch their ids for linking crops/events
+            # (keep simple: map by track_id for this video_source)
+            from sqlalchemy import select
+            from core.database.models import Tracklet
+
+            rows = await session.execute(
+                select(Tracklet.id, Tracklet.track_id).where(Tracklet.video_source == (file.filename or "upload"))
+            )
+            tracklet_id_by_track: dict[int, int] = {int(tid): int(tid_db) for tid_db, tid in rows.all()}
+
+            # classification summary per tracklet
+            for r in results:
+                tid = r.get("track_id")
+                aid = r.get("animal_id")
+                if tid is None:
+                    continue
+                preds = tracklet_classifications.get(int(tid), [])
+                if not preds:
+                    continue
+                by_label: dict[str, list[float]] = {}
+                for p in preds:
+                    lbl = str(p.get("label", "unknown"))
+                    sc = float(p.get("score", 0.0))
+                    by_label.setdefault(lbl, []).append(sc)
+                best_label = max(by_label.items(), key=lambda kv: (len(kv[1]), float(np.mean(kv[1]))))[0]
+                best_score = float(np.mean(by_label[best_label])) if by_label[best_label] else 0.0
+                events_payload.append(
+                    {
+                        "event_type": "classification_summary",
+                        "animal_id": aid,
+                        "tracklet_id": tracklet_id_by_track.get(int(tid)),
+                        "payload": {"label": best_label, "score": best_score, "num_frames": len(preds)},
+                    }
+                )
+
+            # crops save
+            try:
+                import cv2
+            except Exception:
+                cv2 = None
+            if cv2 is not None:
+                for r in results:
+                    tid = r.get("track_id")
+                    aid = r.get("animal_id")
+                    if tid is None or aid is None:
+                        continue
+                    for j, item in enumerate(tracklet_crops.get(int(tid), [])):
+                        crop_bgr = item["crop_bgr"]
+                        frame_index = int(item.get("frame_index") or 0)
+                        bbox = item.get("bbox")
+                        out_dir = Path(crops_dir) / f"animal_{int(aid)}"
+                        out_dir.mkdir(parents=True, exist_ok=True)
+                        out_path = out_dir / f"{Path(file.filename or 'upload').stem}_t{int(tid)}_f{frame_index}_{j}.jpg"
+                        cv2.imwrite(str(out_path), crop_bgr)
+                        crops_payload.append(
+                            {
+                                "animal_id": int(aid),
+                                "tracklet_id": tracklet_id_by_track.get(int(tid)),
+                                "source_path": str(out_path),
+                                "frame_index": frame_index,
+                                "bbox": bbox,
+                                "metadata": {"video_source": file.filename or "upload", "track_id": int(tid)},
+                            }
+                        )
+
+            # Now persist crops + events in the same transaction.
+            await save_inference_results(
+                session,
+                file.filename or "upload",
+                [],
+                {},
+                metrics=None,
+                animal_crops=crops_payload,
+                extra_events=events_payload,
             )
             await session.commit()
+            try:
+                store.save()
+            except Exception:
+                pass
 
     return {
         "frames_processed": frame_idx,
         "count": count,
         "unique_identified": unique_identified,
+        "classification_enabled": classifier is not None,
+        "auto_enrolled": sum(1 for r in results if r.get("enrolled")),
         "tracklets": [
             {"track_id": r["track_id"], "num_embeddings": r["num_embeddings"], "animal_id": r["animal_id"], "score": r["score"]}
             for r in results
@@ -152,9 +324,13 @@ async def inference_frames(
     if not frames:
         raise HTTPException(status_code=400, detail="No valid images")
 
-    detector, tracker, cropper, encoder, decision = _get_inference_components()
+    detector, classifier, tracker, cropper, encoder, decision = _get_inference_components(request)
     store = request.app.state.faiss_store
     tracklet_embeddings = defaultdict(list)
+    tracklet_classifications: dict[int, list[dict[str, float | str]]] = defaultdict(list)
+    config = getattr(request.app.state, "config", {}) or {}
+    crops_per_tracklet = int(config.get("inference", {}).get("crops_per_tracklet", 3))
+    tracklet_crops: dict[int, list[dict[str, object]]] = defaultdict(list)
     frame_detections: dict[int, list[tuple[list[float], int]]] = {}
 
     for frame_idx, frame in enumerate(frames):
@@ -163,24 +339,38 @@ async def inference_frames(
         tracked = tracker.update(det_list)
         frame_detections[frame_idx] = [(det["bbox"], det["track_id"]) for det in tracked if det.get("track_id")]
         batch = []
+        cls_batch = []
         for det in tracked:
             tid = det.get("track_id")
             if tid is None:
                 continue
             crop = cropper.crop(frame, det["bbox"])
             batch.append((tid, crop))
+            if classifier is not None:
+                cls_batch.append((tid, crop))
+            if crops_per_tracklet > 0 and len(tracklet_crops[int(tid)]) < crops_per_tracklet:
+                tracklet_crops[int(tid)].append(
+                    {"crop_bgr": crop, "frame_index": int(frame_idx), "bbox": det.get("bbox")}
+                )
         if batch:
             tids, crops = zip(*batch)
             embs = encoder.encode_batch(list(crops))
             for i, tid in enumerate(tids):
                 tracklet_embeddings[tid].append(embs[i])
+        if classifier is not None and cls_batch:
+            cls_tids, cls_crops = zip(*cls_batch)
+            preds = classifier.predict_batch(list(cls_crops))
+            for tid, p in zip(cls_tids, preds):
+                tracklet_classifications[tid].append({"label": p.label, "score": float(p.score)})
 
     tracklet_results = []
+    aggregated_by_tid: dict[int, np.ndarray] = {}
     for tid, embs in tracklet_embeddings.items():
         if len(embs) < decision.min_embeddings_per_tracklet:
             tracklet_results.append({"track_id": tid, "animal_id": None, "score": 0.0, "num_embeddings": len(embs)})
             continue
         agg = aggregate_embeddings(embs)
+        aggregated_by_tid[int(tid)] = agg
         animal_id, score = decision.decide(agg, store, top_k=5)
         tracklet_results.append({"track_id": tid, "animal_id": animal_id, "score": float(score), "num_embeddings": len(embs)})
 
@@ -190,19 +380,110 @@ async def inference_frames(
     if save_db:
         from core.database.session import async_session_factory
         from core.database.inference_persistence import save_inference_results
+        from core.database.auto_enroll import auto_enroll_unknown_tracklets
+        from core.config import repo_root
         async with async_session_factory() as session:
+            auto_enrolled = await auto_enroll_unknown_tracklets(
+                session=session,
+                store=store,
+                tracklet_results=tracklet_results,
+                tracklet_aggregated_embeddings=aggregated_by_tid,
+                video_source="frames_upload",
+            )
             await save_inference_results(
                 session,
                 "frames_upload",
                 tracklet_results,
                 frame_detections,
-                metrics={"count": count, "unique_identified": unique_identified},
+                metrics={
+                    "count": count,
+                    "unique_identified": unique_identified,
+                    "classification": {"enabled": classifier is not None},
+                    "auto_enroll": {"created": len(auto_enrolled)},
+                },
+                animal_crops=[],
+                extra_events=[],
+            )
+
+            # link crops/events
+            from sqlalchemy import select
+            from core.database.models import Tracklet
+
+            rows = await session.execute(select(Tracklet.id, Tracklet.track_id).where(Tracklet.video_source == "frames_upload"))
+            tracklet_id_by_track: dict[int, int] = {int(tid): int(tid_db) for tid_db, tid in rows.all()}
+
+            events_payload: list[dict[str, object]] = []
+            for r in tracklet_results:
+                tid = r.get("track_id")
+                aid = r.get("animal_id")
+                if tid is None:
+                    continue
+                preds = tracklet_classifications.get(int(tid), [])
+                if not preds:
+                    continue
+                by_label: dict[str, list[float]] = {}
+                for p in preds:
+                    lbl = str(p.get("label", "unknown"))
+                    sc = float(p.get("score", 0.0))
+                    by_label.setdefault(lbl, []).append(sc)
+                best_label = max(by_label.items(), key=lambda kv: (len(kv[1]), float(np.mean(kv[1]))))[0]
+                best_score = float(np.mean(by_label[best_label])) if by_label[best_label] else 0.0
+                events_payload.append(
+                    {
+                        "event_type": "classification_summary",
+                        "animal_id": aid,
+                        "tracklet_id": tracklet_id_by_track.get(int(tid)),
+                        "payload": {"label": best_label, "score": best_score, "num_frames": len(preds)},
+                    }
+                )
+
+            crops_payload: list[dict[str, object]] = []
+            crops_dir = repo_root() / "core" / "data" / "crops"
+            crops_dir.mkdir(parents=True, exist_ok=True)
+            for r in tracklet_results:
+                tid = r.get("track_id")
+                aid = r.get("animal_id")
+                if tid is None or aid is None:
+                    continue
+                for j, item in enumerate(tracklet_crops.get(int(tid), [])):
+                    crop_bgr = item["crop_bgr"]
+                    frame_index = int(item.get("frame_index") or 0)
+                    bbox = item.get("bbox")
+                    out_dir = Path(crops_dir) / f"animal_{int(aid)}"
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    out_path = out_dir / f"frames_upload_t{int(tid)}_f{frame_index}_{j}.jpg"
+                    cv2.imwrite(str(out_path), crop_bgr)
+                    crops_payload.append(
+                        {
+                            "animal_id": int(aid),
+                            "tracklet_id": tracklet_id_by_track.get(int(tid)),
+                            "source_path": str(out_path),
+                            "frame_index": frame_index,
+                            "bbox": bbox,
+                            "metadata": {"video_source": "frames_upload", "track_id": int(tid)},
+                        }
+                    )
+
+            await save_inference_results(
+                session,
+                "frames_upload",
+                [],
+                {},
+                metrics=None,
+                animal_crops=crops_payload,
+                extra_events=events_payload,
             )
             await session.commit()
+            try:
+                store.save()
+            except Exception:
+                pass
 
     return {
         "frames_processed": len(frames),
         "count": count,
         "unique_identified": unique_identified,
+        "classification_enabled": classifier is not None,
+        "auto_enrolled": sum(1 for r in tracklet_results if r.get("enrolled")),
         "tracklets": tracklet_results,
     }

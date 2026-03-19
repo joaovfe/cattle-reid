@@ -8,7 +8,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.database.models import Event, Tracklet
+from core.database.models import AnimalCrop, Event, Tracklet
 
 
 def _track_id_to_frame_range(frame_detections: dict[int, list[tuple[list[float], int]]]) -> dict[int, tuple[int, int]]:
@@ -29,6 +29,8 @@ async def save_inference_results(
     tracklet_results: list[dict[str, Any]],
     frame_detections: dict[int, list[tuple[list[float], int]]],
     metrics: dict[str, Any] | None = None,
+    animal_crops: list[dict[str, Any]] | None = None,
+    extra_events: list[dict[str, Any]] | None = None,
 ) -> list[int]:
     """
     Salva tracklets e evento de contagem no banco.
@@ -73,4 +75,30 @@ async def save_inference_results(
     )
     session.add(event)
     await session.flush()
+
+    if animal_crops:
+        for c in animal_crops:
+            session.add(
+                AnimalCrop(
+                    animal_id=int(c["animal_id"]),
+                    tracklet_id=c.get("tracklet_id"),
+                    source_path=str(c["source_path"]),
+                    frame_index=c.get("frame_index"),
+                    bbox=c.get("bbox"),
+                    metadata_=c.get("metadata"),
+                )
+            )
+
+    if extra_events:
+        for e in extra_events:
+            session.add(
+                Event(
+                    event_type=str(e["event_type"]),
+                    animal_id=e.get("animal_id"),
+                    tracklet_id=e.get("tracklet_id"),
+                    payload=e.get("payload"),
+                    timestamp=e.get("timestamp") or datetime.utcnow(),
+                )
+            )
+
     return tracklet_ids

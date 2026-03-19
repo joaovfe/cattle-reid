@@ -12,11 +12,17 @@ database:
 
 models:
   yolo:
-    weights: yolo11n.pt  # yolo11n.pt (default), yolo11s.pt (mais preciso), ou path customizado
+    weights: models/best_cow.pt  # modelo treinado (detecção bovinos)
     conf_threshold: 0.55   # >0.5 para maior precisão (menos falsos positivos)
     iou_threshold: 0.45
     max_det: 300
     half: true  # fp16 para GPU, mais rápido
+  classifier:
+    # Classificador (ex.: pose). Usado para metadata/eventos; não interfere no Re-ID por embeddings.
+    weights: models/cow_pose_classifier.pt
+    backend: ultralytics  # ultralytics | torchscript (fallback)
+    device: cuda
+    half: true
   embedding:
     # DINOv2 (livre). DINOv3 (facebook/dinov3-vits16-pretrain-lvd1689m) é gated: requer login HF e aceite de licença.
     model_name: facebook/dinov2-small
@@ -45,3 +51,4 @@ inference:
   frame_skip: 1  # process every N frames
   batch_embedding: true
   batch_size: 16
+  crops_per_tracklet: 3  # quantas imagens salvar por tracklet (auto-cadastro/registro)

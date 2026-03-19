@@ -69,3 +69,17 @@ class ImageMetadata(Base):
     video_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
     timestamp: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     metadata_: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSONB, nullable=True)
+
+
+class AnimalCrop(Base):
+    __tablename__ = "animal_crops"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    animal_id: Mapped[int] = mapped_column(ForeignKey("animals.id"), nullable=False, index=True)
+    tracklet_id: Mapped[int | None] = mapped_column(ForeignKey("tracklets.id"), nullable=True, index=True)
+    source_path: Mapped[str] = mapped_column(String(768), nullable=False)
+    frame_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    bbox: Mapped[list[float] | None] = mapped_column(JSONB, nullable=True)
+    metadata_: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+

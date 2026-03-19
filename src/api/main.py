@@ -9,6 +9,9 @@ from src.api.routes import animals, inference, events, health
 
 
 async def lifespan(app: FastAPI):
+    from core.config import load_config
+
+    app.state.config = load_config()
     root = Path(__file__).resolve().parent.parent.parent
     faiss_path = root / "core" / "data" / "faiss_index"
     if not faiss_path.exists():

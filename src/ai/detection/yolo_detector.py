@@ -27,12 +27,16 @@ class YOLOCattleDetector:
         conf_threshold: float = 0.55,
         iou_threshold: float = 0.45,
         max_det: int = 300,
+        allowed_class_ids: list[int] | None = None,
+        allowed_class_names: list[str] | None = None,
         device: str | None = None,
         half: bool = True,
     ) -> None:
         self.conf_threshold = conf_threshold
         self.iou_threshold = iou_threshold
         self.max_det = max_det
+        self.allowed_class_ids = allowed_class_ids
+        self.allowed_class_names = [n.lower() for n in allowed_class_names] if allowed_class_names else None
         self._model_path = str(model_path) if model_path else None
         self._device = device
         self._half = half
@@ -72,11 +76,16 @@ class YOLOCattleDetector:
                 xyxy = r.boxes.xyxy[i].cpu().numpy()
                 conf = float(r.boxes.conf[i].cpu().numpy())
                 cls_id = int(r.boxes.cls[i].cpu().numpy())
+                cls_name = r.names.get(cls_id, "cow")
+                if self.allowed_class_ids is not None and cls_id not in self.allowed_class_ids:
+                    continue
+                if self.allowed_class_names is not None and str(cls_name).lower() not in self.allowed_class_names:
+                    continue
                 out.append(
                     Detection(
                         bbox=xyxy.tolist(),
                         score=conf,
-                        class_name=r.names.get(cls_id, "cow"),
+                        class_name=cls_name,
                         class_id=cls_id,
                     )
                 )
