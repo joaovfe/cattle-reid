@@ -69,6 +69,24 @@ Com índice FAISS e saída JSON:
 uv run python -m src.scripts.run_inference_video --video video.mp4 --faiss core/data/faiss_index --output resultado.json
 ```
 
+### 3.1 CLI simplificado (estilo Agro Vision)
+
+Use o comando abaixo para abrir o fluxo de **analisar video**:
+
+```bash
+uv run cattle-reid-drone
+```
+
+Esse comando usa a pasta `videos/` na raiz do projeto. Basta colocar os videos ali e escolher um da lista para analisar.
+
+Antes de analisar, o CLI atualiza automaticamente a galeria de embeddings usando `gallery_images/`:
+
+Antes de analisar, o CLI sincroniza o FAISS a partir do **banco**:
+
+- Fonte oficial: tabela `animal_crops` (imagens vinculadas ao `animal_id`)
+- Cada embedding usa o ID já salvo no banco
+- O pipeline reconstrói a galeria FAISS com base nesses registros
+
 ### 4. Treino YOLO (detecção)
 
 ```bash

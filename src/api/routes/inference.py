@@ -14,6 +14,24 @@ from fastapi import APIRouter, Request, UploadFile, File, HTTPException, Query
 router = APIRouter()
 
 
+def _require_model_weights(
+    model_path: str | None,
+    model_label: str,
+    expected_filename: str | None = None,
+) -> str:
+    if not model_path:
+        raise HTTPException(status_code=500, detail=f"{model_label} weights are required.")
+    path = Path(model_path)
+    if not path.exists():
+        raise HTTPException(status_code=500, detail=f"{model_label} weights not found: {path}")
+    if expected_filename and path.name != expected_filename:
+        raise HTTPException(
+            status_code=500,
+            detail=f"{model_label} must use {expected_filename}. Received: {path.name}",
+        )
+    return str(path)
+
+
 def _get_inference_components(request: Request):
     config = getattr(request.app.state, "config", {}) or {}
     models_cfg = config.get("models", {})
@@ -32,25 +50,42 @@ def _get_inference_components(request: Request):
 
     from core.config import resolve_path
 
+    yolo_weights = _require_model_weights(
+        resolve_path(yolo_cfg.get("weights")),
+        model_label="YOLO detector",
+        expected_filename="best_cow.pt",
+    )
     detector = YOLOCattleDetector(
-        model_path=resolve_path(yolo_cfg.get("weights")),
+        model_path=yolo_weights,
         conf_threshold=float(yolo_cfg.get("conf_threshold", 0.55)),
         iou_threshold=float(yolo_cfg.get("iou_threshold", 0.45)),
         max_det=int(yolo_cfg.get("max_det", 300)),
+        allowed_class_ids=yolo_cfg.get("allowed_class_ids"),
+        allowed_class_names=yolo_cfg.get("allowed_class_names"),
         device=yolo_cfg.get("device"),
         half=bool(yolo_cfg.get("half", True)),
     )
     classifier = None
+    require_classifier = bool(config.get("inference", {}).get("require_classifier", True))
     if cls_cfg.get("weights"):
         backend = str(cls_cfg.get("backend", "ultralytics")).lower()
         if backend == "ultralytics":
             from src.ai.classification.ultralytics_classifier import UltralyticsImageClassifier
 
+            cls_weights = _require_model_weights(
+                resolve_path(cls_cfg.get("weights")) or str(cls_cfg.get("weights")),
+                model_label="Pose classifier",
+                expected_filename="cow_pose_classifier.pt",
+            )
             classifier = UltralyticsImageClassifier(
-                model_path=resolve_path(cls_cfg.get("weights")) or str(cls_cfg.get("weights")),
+                model_path=cls_weights,
                 device=cls_cfg.get("device"),
                 half=bool(cls_cfg.get("half", True)),
             )
+    elif require_classifier:
+        raise HTTPException(status_code=500, detail="Classifier weights are required for inference.")
+    if require_classifier and classifier is None:
+        raise HTTPException(status_code=500, detail="Classifier backend misconfigured or unavailable.")
     tracker = ByteTrackTracker(
         TrackerConfig(
             max_age=int(track_cfg.get("max_age", 30)),
@@ -69,6 +104,7 @@ def _get_inference_components(request: Request):
     decision = IdentityDecision(
         similarity_threshold=float(reid_cfg.get("similarity_threshold", 0.25)),
         min_embeddings_per_tracklet=int(reid_cfg.get("min_embeddings_per_tracklet", 4)),
+        top1_top2_margin=float(reid_cfg.get("top1_top2_margin", 0.08)),
     )
     return detector, classifier, tracker, cropper, encoder, decision
 

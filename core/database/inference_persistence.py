@@ -57,24 +57,25 @@ async def save_inference_results(
         await session.flush()
         tracklet_ids.append(t.id)
 
-    unique_tracklets = len(tracklet_results)
-    unique_identified = sum(1 for r in tracklet_results if r.get("animal_id") is not None)
-    payload: dict[str, Any] = {
-        "video_source": video_source,
-        "unique_tracklets": unique_tracklets,
-        "unique_identified": unique_identified,
-        "count": unique_tracklets,
-    }
-    if metrics:
-        payload["metrics"] = metrics
+    if tracklet_results or metrics:
+        unique_tracklets = len(tracklet_results)
+        unique_identified = sum(1 for r in tracklet_results if r.get("animal_id") is not None)
+        payload: dict[str, Any] = {
+            "video_source": video_source,
+            "unique_tracklets": unique_tracklets,
+            "unique_identified": unique_identified,
+            "count": unique_tracklets,
+        }
+        if metrics:
+            payload["metrics"] = metrics
 
-    event = Event(
-        event_type="count_summary",
-        payload=payload,
-        timestamp=datetime.utcnow(),
-    )
-    session.add(event)
-    await session.flush()
+        event = Event(
+            event_type="count_summary",
+            payload=payload,
+            timestamp=datetime.utcnow(),
+        )
+        session.add(event)
+        await session.flush()
 
     if animal_crops:
         for c in animal_crops:

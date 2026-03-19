@@ -45,15 +45,16 @@ class YOLOCattleDetector:
     def _get_model(self):  # noqa: ANN201
         if self._model is not None:
             return self._model
+        if not self._model_path:
+            raise ValueError("YOLO weights path is required and must point to best_cow.pt.")
+        model_path = Path(self._model_path)
+        if not model_path.exists():
+            raise FileNotFoundError(f"YOLO weights not found: {model_path}")
         try:
             from ultralytics import YOLO
         except ImportError as e:
             raise ImportError("Install ultralytics: uv add ultralytics") from e
-        default = "yolo11n.pt"
-        if self._model_path and Path(self._model_path).exists():
-            self._model = YOLO(self._model_path)
-        else:
-            self._model = YOLO(self._model_path or default)
+        self._model = YOLO(str(model_path))
         return self._model
 
     def detect(self, frame_bgr: np.ndarray) -> list[Detection]:

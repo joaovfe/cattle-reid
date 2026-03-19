@@ -16,6 +16,7 @@ models:
     conf_threshold: 0.55   # >0.5 para maior precisão (menos falsos positivos)
     iou_threshold: 0.45
     max_det: 300
+    allowed_class_names: ["cow"]
     half: true  # fp16 para GPU, mais rápido
   classifier:
     # Classificador (ex.: pose). Usado para metadata/eventos; não interfere no Re-ID por embeddings.
@@ -39,7 +40,8 @@ tracking:
   iou_threshold: 0.3
 
 reid:
-  similarity_threshold: 0.25  # >0 para mais assertivo (rejeitar matches fracos)
+  similarity_threshold: 0.45  # limiar conservador para evitar falso positivo
+  top1_top2_margin: 0.10  # exige separação mínima entre o melhor e o segundo candidato
   min_embeddings_per_tracklet: 4  # mais embeddings = decisão mais estável
   aggregate: mean
 
@@ -51,4 +53,5 @@ inference:
   frame_skip: 1  # process every N frames
   batch_embedding: true
   batch_size: 16
+  require_classifier: true
   crops_per_tracklet: 3  # quantas imagens salvar por tracklet (auto-cadastro/registro)
