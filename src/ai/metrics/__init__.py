@@ -9,10 +9,16 @@ from src.ai.metrics.count_metrics import (
     compute_count_metrics,
     CountMetrics,
 )
+from src.ai.metrics.tracklet_evaluation import (
+    compute_tracklet_evaluation_metrics,
+    TrackletEvaluationMetrics,
+)
 
 __all__ = [
     "compute_detection_metrics",
     "DetectionMetrics",
     "compute_count_metrics",
     "CountMetrics",
+    "compute_tracklet_evaluation_metrics",
+    "TrackletEvaluationMetrics",
 ]

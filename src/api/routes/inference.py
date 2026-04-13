@@ -324,6 +324,13 @@ async def inference_video(
             except Exception:
                 pass
 
+    from src.ai.metrics.tracklet_evaluation import compute_tracklet_evaluation_metrics
+
+    evaluation_metrics = compute_tracklet_evaluation_metrics(
+        tracklet_results=results,
+        min_embeddings_threshold=10,
+    )
+
     return {
         "frames_processed": frame_idx,
         "count": count,
@@ -331,9 +338,15 @@ async def inference_video(
         "classification_enabled": classifier is not None,
         "auto_enrolled": sum(1 for r in results if r.get("enrolled")),
         "tracklets": [
-            {"track_id": r["track_id"], "num_embeddings": r["num_embeddings"], "animal_id": r["animal_id"], "score": r["score"]}
+            {"track_id": r["track_id"], "num_embeddings": r["num_embeddings"], "animal_id": r["animal_id"], "score": r["score"], "enrolled": r.get("enrolled", False)}
             for r in results
         ],
+        "metrics": {
+            "valid_animals": evaluation_metrics.valid_animals,
+            "false_tracks": evaluation_metrics.false_tracks,
+            "duplicate_count": evaluation_metrics.duplicate_count,
+            "predicted_count": evaluation_metrics.predicted_count,
+        },
     }
 
 
@@ -515,6 +528,13 @@ async def inference_frames(
             except Exception:
                 pass
 
+    from src.ai.metrics.tracklet_evaluation import compute_tracklet_evaluation_metrics
+
+    evaluation_metrics = compute_tracklet_evaluation_metrics(
+        tracklet_results=tracklet_results,
+        min_embeddings_threshold=10,
+    )
+
     return {
         "frames_processed": len(frames),
         "count": count,
@@ -522,4 +542,10 @@ async def inference_frames(
         "classification_enabled": classifier is not None,
         "auto_enrolled": sum(1 for r in tracklet_results if r.get("enrolled")),
         "tracklets": tracklet_results,
+        "metrics": {
+            "valid_animals": evaluation_metrics.valid_animals,
+            "false_tracks": evaluation_metrics.false_tracks,
+            "duplicate_count": evaluation_metrics.duplicate_count,
+            "predicted_count": evaluation_metrics.predicted_count,
+        },
     }
