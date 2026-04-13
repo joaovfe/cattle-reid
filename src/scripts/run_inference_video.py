@@ -151,6 +151,7 @@ def main() -> None:
     from src.ai.reid.faiss_store import FAISSStore
     from src.ai.reid.identity_decision import IdentityDecision, aggregate_embeddings
     from src.ai.metrics.count_metrics import compute_count_metrics
+    from src.ai.metrics.tracklet_evaluation import compute_tracklet_evaluation_metrics
     from src.ai.classification.ultralytics_classifier import UltralyticsImageClassifier
     from core.config import resolve_path, repo_root
 
@@ -428,6 +429,10 @@ def main() -> None:
         print("Resultados salvos no banco (tracklets + evento count_summary).")
 
     if args.output:
+        evaluation_metrics = compute_tracklet_evaluation_metrics(
+            tracklet_results=results,
+            min_embeddings_threshold=10,
+        )
         out_data = {
             "frames_processed": frame_idx,
             "tracklets": results,
@@ -437,6 +442,10 @@ def main() -> None:
             "metrics": {
                 "ground_truth_count": count_metrics.ground_truth_count,
                 "absolute_error": count_metrics.absolute_error,
+                "valid_animals": evaluation_metrics.valid_animals,
+                "false_tracks": evaluation_metrics.false_tracks,
+                "duplicate_count": evaluation_metrics.duplicate_count,
+                "predicted_count": evaluation_metrics.predicted_count,
             },
             "classifications": track_id_to_classification,
         }
