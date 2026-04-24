@@ -24,7 +24,7 @@ class YOLOCattleDetector:
     def __init__(
         self,
         model_path: str | Path | None = None,
-        conf_threshold: float = 0.55,
+        conf_threshold: float = 0.45,
         iou_threshold: float = 0.45,
         max_det: int = 300,
         allowed_class_ids: list[int] | None = None,

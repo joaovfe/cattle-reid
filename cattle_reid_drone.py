@@ -10,6 +10,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from core.config import load_repo_dotenv
+
 
 VIDEO_EXTENSIONS = (".mp4", ".avi", ".mov", ".mkv", ".m4v")
 
@@ -100,6 +102,7 @@ def _run_analysis(video_path: Path) -> int:
 
 
 def main() -> None:
+    load_repo_dotenv()
     print("=" * 58)
     print(" CATTLE REID DRONE - CLI")
     print(" Opcao disponivel: analisar video")

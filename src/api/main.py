@@ -3,15 +3,28 @@ FastAPI application: enrollment, inference, lookup, events, health.
 """
 from pathlib import Path
 
+from core.config import load_repo_dotenv
 from fastapi import FastAPI
+
+load_repo_dotenv()
 
 from src.api.routes import animals, inference, events, health
 
 
 async def lifespan(app: FastAPI):
     from core.config import load_config
+    from core.storage.minio_storage import get_minio_storage
 
     app.state.config = load_config()
+    app.state.minio = None
+    try:
+        storage = get_minio_storage()
+        if storage is not None:
+            storage.ensure_bucket()
+            app.state.minio = storage
+    except Exception:
+        # API segue sem MinIO (ex.: dev sem container); uploads usam disco local.
+        app.state.minio = None
     root = Path(__file__).resolve().parent.parent.parent
     faiss_path = root / "core" / "data" / "faiss_index"
     if not faiss_path.exists():

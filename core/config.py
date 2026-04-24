@@ -8,6 +8,22 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def load_repo_dotenv() -> None:
+    """
+    Carrega `<repo>/.env` para os.environ.
+
+    O Hugging Face Hub e outras libs leem HF_TOKEN só do ambiente do processo;
+    ter o token no .env não basta sem este passo (a não ser export manual no shell).
+    """
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+    path = repo_root() / ".env"
+    if path.is_file():
+        load_dotenv(path, override=False)
+
+
 def load_config(config_path: str | Path = "configs/default.yaml") -> dict[str, Any]:
     """
     Load YAML config.

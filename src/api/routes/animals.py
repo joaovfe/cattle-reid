@@ -1,7 +1,9 @@
 """Enrollment: POST /animals, POST /animals/{id}/enroll, GET /animals/{id}."""
 from __future__ import annotations
 
+import asyncio
 import io
+import uuid
 from typing import Any
 
 import numpy as np
@@ -40,8 +42,10 @@ async def create_animal(body: AnimalCreate, request: Request):
 @router.post("/{animal_id}/enroll")
 async def enroll_animal(animal_id: int, request: Request, files: list[UploadFile] = File(...)):
     store = request.app.state.faiss_store
+    minio_storage = getattr(request.app.state, "minio", None)
+    enroll_uid = str(uuid.uuid4())
     crops: list[np.ndarray] = []
-    for f in files:
+    for idx, f in enumerate(files):
         content = await f.read()
         try:
             import cv2
@@ -49,10 +53,17 @@ async def enroll_animal(animal_id: int, request: Request, files: list[UploadFile
             img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
             if img is not None:
                 crops.append(img)
+                if minio_storage is not None:
+                    key = f"enrollment/{animal_id}/{enroll_uid}_{idx}.jpg"
+                    await asyncio.to_thread(minio_storage.put_bytes, key, content, "image/jpeg")
         except Exception:
             try:
                 from PIL import Image
-                crops.append(np.array(Image.open(io.BytesIO(content)))[:, :, ::-1])
+                arr_rgb = np.array(Image.open(io.BytesIO(content)))
+                crops.append(arr_rgb[:, :, ::-1])
+                if minio_storage is not None:
+                    key = f"enrollment/{animal_id}/{enroll_uid}_{idx}.jpg"
+                    await asyncio.to_thread(minio_storage.put_bytes, key, content, "image/jpeg")
             except Exception:
                 pass
     if not crops:

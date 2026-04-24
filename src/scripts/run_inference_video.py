@@ -123,6 +123,10 @@ def main() -> None:
     parser.add_argument("--gt_count", type=int, default=None, help="Ground truth count (for metrics comparison)")
     args = parser.parse_args()
 
+    from core.config import load_repo_dotenv, resolve_path, repo_root
+
+    load_repo_dotenv()
+
     video_path = Path(args.video)
     if not video_path.exists():
         raise SystemExit(f"Video not found: {video_path}")
@@ -147,12 +151,11 @@ def main() -> None:
     from src.ai.detection.yolo_detector import YOLOCattleDetector
     from src.ai.tracking.bytetrack_tracker import ByteTrackTracker, TrackerConfig
     from src.ai.oriented_crop.cropper import OrientedCropper
-    from src.ai.embedding.dino_encoder import CattleEmbeddingEncoder, DINOV2_SMALL
+    from src.ai.embedding.dino_encoder import CattleEmbeddingEncoder, DINOV3_SMALL
     from src.ai.reid.faiss_store import FAISSStore
     from src.ai.reid.identity_decision import IdentityDecision, aggregate_embeddings
-    from src.ai.metrics.count_metrics import compute_count_metrics
+    from src.ai.metrics.count_metrics import compute_count_metrics, compute_tracklet_evaluation_metrics
     from src.ai.classification.ultralytics_classifier import UltralyticsImageClassifier
-    from core.config import resolve_path, repo_root
 
     yolo_weights = _require_model_weights(
         resolve_path(yolo_cfg.get("weights")),
@@ -161,7 +164,7 @@ def main() -> None:
     )
     detector = YOLOCattleDetector(
         model_path=yolo_weights,
-        conf_threshold=float(yolo_cfg.get("conf_threshold", 0.55)),
+        conf_threshold=float(yolo_cfg.get("conf_threshold", 0.45)),
         iou_threshold=float(yolo_cfg.get("iou_threshold", 0.45)),
         max_det=yolo_cfg.get("max_det", 300),
         allowed_class_ids=yolo_cfg.get("allowed_class_ids"),
@@ -195,7 +198,7 @@ def main() -> None:
         crop_cfg.get("padding", 0.1),
     )
     encoder = CattleEmbeddingEncoder(
-        model_name=emb_cfg.get("model_name", DINOV2_SMALL),
+        model_name=emb_cfg.get("model_name", DINOV3_SMALL),
         half=emb_cfg.get("half", True),
     )
     decision = IdentityDecision(
@@ -320,6 +323,12 @@ def main() -> None:
         unique_identified=unique_identified,
         ground_truth_count=args.gt_count,
     )
+    eval_metrics = compute_tracklet_evaluation_metrics(results)
+    count_accuracy_pct = (
+        count_metrics.count_accuracy_pct
+        if count_metrics.count_accuracy_pct is not None
+        else eval_metrics.precision_pct
+    )
 
     print(f"Frames processados: {frame_idx}")
     print(f"Contagem: {count_metrics.predicted_count} indivíduos (tracklets únicos)")
@@ -341,13 +350,6 @@ def main() -> None:
             from core.database.models import Tracklet
             from sqlalchemy import select
 
-            metrics_dict = {
-                "count": count_metrics.predicted_count,
-                "unique_identified": count_metrics.unique_identified,
-                "ground_truth_count": count_metrics.ground_truth_count,
-                "absolute_error": count_metrics.absolute_error,
-                "classification": {"enabled": classifier is not None},
-            }
             async with async_session_factory() as session:
                 aggregated_by_tid: dict[int, np.ndarray] = {}
                 for r in results:
@@ -363,6 +365,20 @@ def main() -> None:
                     tracklet_aggregated_embeddings=aggregated_by_tid,
                     video_source=str(video_path.resolve()),
                 )
+                eval_metrics_db = compute_tracklet_evaluation_metrics(results)
+                metrics_dict = {
+                    "count": count_metrics.predicted_count,
+                    "unique_identified": count_metrics.unique_identified,
+                    "ground_truth_count": count_metrics.ground_truth_count,
+                    "absolute_error": count_metrics.absolute_error,
+                    "count_accuracy_pct": count_accuracy_pct,
+                    "valid_animals": eval_metrics_db.valid_animals,
+                    "false_tracks": eval_metrics_db.false_tracks,
+                    "duplicate_animals": eval_metrics_db.duplicate_animals,
+                    "predicted_count": eval_metrics_db.predicted_count,
+                    "precision_pct": eval_metrics_db.precision_pct,
+                    "classification": {"enabled": classifier is not None},
+                }
                 await save_inference_results(
                     session,
                     str(video_path.resolve()),
@@ -426,6 +442,12 @@ def main() -> None:
                 await session.commit()
         asyncio.run(_persist())
         print("Resultados salvos no banco (tracklets + evento count_summary).")
+        eval_metrics = compute_tracklet_evaluation_metrics(results)
+        count_accuracy_pct = (
+            count_metrics.count_accuracy_pct
+            if count_metrics.count_accuracy_pct is not None
+            else eval_metrics.precision_pct
+        )
 
     if args.output:
         out_data = {
@@ -437,6 +459,12 @@ def main() -> None:
             "metrics": {
                 "ground_truth_count": count_metrics.ground_truth_count,
                 "absolute_error": count_metrics.absolute_error,
+                "count_accuracy_pct": count_accuracy_pct,
+                "valid_animals": eval_metrics.valid_animals,
+                "false_tracks": eval_metrics.false_tracks,
+                "duplicate_animals": eval_metrics.duplicate_animals,
+                "predicted_count": eval_metrics.predicted_count,
+                "precision_pct": eval_metrics.precision_pct,
             },
             "classifications": track_id_to_classification,
         }

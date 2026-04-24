@@ -19,13 +19,13 @@ DINOV2_SMALL = "facebook/dinov2-small"
 class CattleEmbeddingEncoder:
     """
     Extract global embeddings from cattle crops using DINOv3 or DINOv2 (HuggingFace).
-    Default: DINOv2 (facebook/dinov2-small). For DINOv3 use model_name=
-    'facebook/dinov3-vits16-pretrain-lvd1689m' (requires transformers with DINOv3 support).
+    Default: DINOv3 (facebook/dinov3-vits16-pretrain-lvd1689m). Para DINOv2 use model_name=
+    facebook/dinov2-small.
     """
 
     def __init__(
         self,
-        model_name: str = DINOV2_SMALL,
+        model_name: str = DINOV3_SMALL,
         device: str | None = None,
         half: bool = True,
     ) -> None:

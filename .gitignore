@@ -1,4 +1,5 @@
 /videos/
 .venv
 /resultados
-/core/data/
+/core/data/ 
+.env

@@ -101,13 +101,10 @@ uv run python -m src.training.train_reid --data_root path/to/BECA-D --epochs 30
 
 ## Embedding: DINOv2 vs DINOv3
 
-- **DINOv2** está implementado e é o **padrão** (`facebook/dinov2-small`), com boa compatibilidade com HuggingFace Transformers.
-- **DINOv3** está disponível no HuggingFace (`facebook/dinov3-vits16-pretrain-lvd1689m`). Para usar DINOv3, passe o `model_name` no encoder:
+- **DINOv3** é o **padrão** (`facebook/dinov3-vits16-pretrain-lvd1689m` no `configs/default.yaml`). O cartão do modelo no Hugging Face pode ser *gated* (login + aceite de licença) e exige `HF_TOKEN`.
+- **DINOv2** (`facebook/dinov2-small`) continua disponível: altere `models.embedding.model_name` no YAML ou use `CattleEmbeddingEncoder(model_name="facebook/dinov2-small")`.
 
-  - Em código: `CattleEmbeddingEncoder(model_name="facebook/dinov3-vits16-pretrain-lvd1689m")`.
-  - No `configs/default.yaml`, em `models.embedding.model_name`, use `facebook/dinov3-vits16-pretrain-lvd1689m`.
-
-A API e o script de inferência usam o encoder com o nome de modelo padrão (DINOv2). Para usar DINOv3 na API/CLI, será necessário ler o config e passar `model_name` ao instanciar `CattleEmbeddingEncoder` (ou adicionar variável de ambiente `EMBEDDING_MODEL_NAME`).
+A API e a CLI leem `models.embedding` do config ao instanciar `CattleEmbeddingEncoder`. Ao mudar entre v2 e v3, **reconstrua o índice FAISS** (embeddings de dimensão/espaço diferentes).
 
 ## Variáveis de ambiente
 

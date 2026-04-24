@@ -25,8 +25,8 @@ models:
     device: cuda
     half: true
   embedding:
-    # DINOv2 (livre). DINOv3 (facebook/dinov3-vits16-pretrain-lvd1689m) é gated: requer login HF e aceite de licença.
-    model_name: facebook/dinov2-small
+    # DINOv3 (gated no HF: login + aceite de licença no cartão do modelo). Reconstruir FAISS após mudar de v2→v3.
+    model_name: facebook/dinov3-vits16-pretrain-lvd1689m
     device: cuda
     output_size: 384
     half: true

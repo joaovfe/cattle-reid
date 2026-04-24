@@ -23,6 +23,7 @@ Requires-Dist: alembic>=1.13
 Requires-Dist: psycopg2-binary>=2.9
 Requires-Dist: pydantic>=2.0
 Requires-Dist: pydantic-settings>=2.0
+Requires-Dist: minio>=7.2
 Provides-Extra: dev
 Requires-Dist: ruff>=0.6; extra == "dev"
 Requires-Dist: pytest>=8.0; extra == "dev"
@@ -109,6 +110,14 @@ uv run cattle-reid-drone
 
 Esse comando usa a pasta `videos/` na raiz do projeto. Basta colocar os videos ali e escolher um da lista para analisar.
 
+Antes de analisar, o CLI atualiza automaticamente a galeria de embeddings usando `gallery_images/`:
+
+Antes de analisar, o CLI sincroniza o FAISS a partir do **banco**:
+
+- Fonte oficial: tabela `animal_crops` (imagens vinculadas ao `animal_id`)
+- Cada embedding usa o ID já salvo no banco
+- O pipeline reconstrói a galeria FAISS com base nesses registros
+
 ### 4. Treino YOLO (detecção)
 
 ```bash
@@ -123,13 +132,10 @@ uv run python -m src.training.train_reid --data_root path/to/BECA-D --epochs 30
 
 ## Embedding: DINOv2 vs DINOv3
 
-- **DINOv2** está implementado e é o **padrão** (`facebook/dinov2-small`), com boa compatibilidade com HuggingFace Transformers.
-- **DINOv3** está disponível no HuggingFace (`facebook/dinov3-vits16-pretrain-lvd1689m`). Para usar DINOv3, passe o `model_name` no encoder:
+- **DINOv3** é o **padrão** (`facebook/dinov3-vits16-pretrain-lvd1689m` no `configs/default.yaml`). O cartão do modelo no Hugging Face pode ser *gated* (login + aceite de licença) e exige `HF_TOKEN`.
+- **DINOv2** (`facebook/dinov2-small`) continua disponível: altere `models.embedding.model_name` no YAML ou use `CattleEmbeddingEncoder(model_name="facebook/dinov2-small")`.
 
-  - Em código: `CattleEmbeddingEncoder(model_name="facebook/dinov3-vits16-pretrain-lvd1689m")`.
-  - No `configs/default.yaml`, em `models.embedding.model_name`, use `facebook/dinov3-vits16-pretrain-lvd1689m`.
-
-A API e o script de inferência usam o encoder com o nome de modelo padrão (DINOv2). Para usar DINOv3 na API/CLI, será necessário ler o config e passar `model_name` ao instanciar `CattleEmbeddingEncoder` (ou adicionar variável de ambiente `EMBEDDING_MODEL_NAME`).
+A API e a CLI leem `models.embedding` do config ao instanciar `CattleEmbeddingEncoder`. Ao mudar entre v2 e v3, **reconstrua o índice FAISS** (embeddings de dimensão/espaço diferentes).
 
 ## Variáveis de ambiente
 

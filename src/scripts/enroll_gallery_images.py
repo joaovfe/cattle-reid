@@ -63,11 +63,11 @@ async def _enroll_gallery(
     from core.config import resolve_path
     from core.database.models import Animal, EmbeddingRef
     from core.database.session import async_session_factory
-    from src.ai.embedding.dino_encoder import CattleEmbeddingEncoder, DINOV2_SMALL
+    from src.ai.embedding.dino_encoder import CattleEmbeddingEncoder, DINOV3_SMALL
     from src.ai.reid.faiss_store import FAISSStore
 
     emb_cfg = (config.get("models", {}) or {}).get("embedding", {}) or {}
-    model_name = str(emb_cfg.get("model_name", DINOV2_SMALL))
+    model_name = str(emb_cfg.get("model_name", DINOV3_SMALL))
     device = emb_cfg.get("device")
     half = bool(emb_cfg.get("half", True))
     encoder = CattleEmbeddingEncoder(model_name=model_name, device=device, half=half)
@@ -148,6 +148,10 @@ async def _enroll_gallery(
 
 
 def main() -> None:
+    from core.config import load_repo_dotenv
+
+    load_repo_dotenv()
+
     parser = argparse.ArgumentParser(description="Enroll gallery images for cattle Re-ID")
     parser.add_argument("--gallery_dir", type=str, default="gallery_images")
     parser.add_argument("--config", type=str, default="configs/default.yaml")
