@@ -21,7 +21,9 @@ def load_repo_dotenv() -> None:
         return
     path = repo_root() / ".env"
     if path.is_file():
-        load_dotenv(path, override=False)
+        # overwrite=True para o `.env` do repositório vencer variáveis antigas exportadas na shell
+        # (ex.: MINIO_PORT=9000 de Docker Compose global vs MINIO_PORT=6300 para S3 na máquina host).
+        load_dotenv(path, override=True)
 
 
 def load_config(config_path: str | Path = "configs/default.yaml") -> dict[str, Any]:

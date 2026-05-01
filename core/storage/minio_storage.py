@@ -18,6 +18,11 @@ def _endpoint_host_port(settings: MinioSettings) -> str:
     return f"{host}:{settings.minio_port}"
 
 
+def minio_s3_target(settings: MinioSettings) -> str:
+    """Endpoint `host:port` passado ao cliente MinIO (S3 API)."""
+    return _endpoint_host_port(settings)
+
+
 class MinioStorage:
     def __init__(self, client: Minio, settings: MinioSettings) -> None:
         self._client = client
@@ -25,7 +30,7 @@ class MinioStorage:
 
     @property
     def bucket(self) -> str:
-        return self._settings.minio_bucket
+        return self._settings.primary_bucket()
 
     @property
     def settings(self) -> MinioSettings:
@@ -35,7 +40,7 @@ class MinioStorage:
     def from_settings(cls, settings: MinioSettings | None = None) -> MinioStorage | None:
         if settings is None:
             settings = MinioSettings()
-        if not settings.minio_enabled or not settings.minio_bucket:
+        if not settings.minio_enabled or not settings.primary_bucket():
             return None
         from minio import Minio
 
@@ -50,27 +55,45 @@ class MinioStorage:
     def ensure_bucket(self) -> None:
         from minio.error import S3Error
 
-        name = self._settings.minio_bucket
+        names: set[str] = {self._settings.primary_bucket()}
+        for raw in (
+            self._settings.minio_bucket_videos,
+            self._settings.minio_bucket_thumbnails,
+            self._settings.minio_bucket_results,
+            self._settings.minio_bucket_reports,
+            self._settings.minio_bucket_crops,
+        ):
+            if raw and raw.strip():
+                names.add(raw.strip())
         try:
-            if not self._client.bucket_exists(name):
-                self._client.make_bucket(name)
+            for name in sorted(names):
+                if not self._client.bucket_exists(name):
+                    self._client.make_bucket(name)
         except S3Error:
             raise
 
-    def put_bytes(self, object_key: str, data: bytes, content_type: str) -> str:
+    def put_bytes(
+        self,
+        object_key: str,
+        data: bytes,
+        content_type: str,
+        *,
+        bucket: str | None = None,
+    ) -> str:
         """Envia objeto e devolve URL HTTP (path-style) para gravar em `source_path`."""
+        bname = (bucket or "").strip() or self._settings.primary_bucket()
         self._client.put_object(
-            self._settings.minio_bucket,
+            bname,
             object_key,
             io.BytesIO(data),
             length=len(data),
             content_type=content_type,
         )
-        return self.public_url(object_key)
+        return self.public_url(object_key, bucket=bname)
 
-    def public_url(self, object_key: str) -> str:
+    def public_url(self, object_key: str, bucket: str | None = None) -> str:
         base = self._settings.minio_base_url.rstrip("/")
-        b = self._settings.minio_bucket
+        b = (bucket or "").strip() or self._settings.primary_bucket()
         key = object_key.lstrip("/")
         return f"{base}/{b}/{key}"
 

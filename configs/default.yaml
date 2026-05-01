@@ -1,6 +1,6 @@
 # Cattle Re-ID Drone — config padrão
-# Para acurácia >95%: treine YOLO no seu dataset de gado, use --gt_count para métricas
-# e ajuste conf_threshold / similarity_threshold com base em validação.
+# Objetivo: mais recall na detecção + re-ID conservador (alvo típico >90% precisão nos matches).
+# Valida com vídeo anotado: --gt_count e revise falsos antes de afrouxar similarity_threshold.
 
 app:
   env: development
@@ -13,8 +13,8 @@ database:
 models:
   yolo:
     weights: models/best_cow.pt  # modelo treinado (detecção bovinos)
-    conf_threshold: 0.55   # >0.5 para maior precisão (menos falsos positivos)
-    iou_threshold: 0.45
+    conf_threshold: 0.43   # menor = mais bbox (recall); NMS/refino no re-id/track
+    iou_threshold: 0.52    # maior NMS IoU em multidão → menos fusão entre indivíduos próximos
     max_det: 300
     allowed_class_names: ["cow"]
     half: true  # fp16 para GPU, mais rápido
@@ -36,13 +36,13 @@ models:
 
 tracking:
   tracker: bytetrack  # bytetrack or deepsort
-  max_age: 30
-  iou_threshold: 0.3
+  max_age: 35           # segurar associações um pouco mais em oclusões breves
+  iou_threshold: 0.28  # ≥ match com IoU; menor = menos troca de track_id por jitter
 
 reid:
-  similarity_threshold: 0.45  # limiar conservador para evitar falso positivo
-  top1_top2_margin: 0.10  # exige separação mínima entre o melhor e o segundo candidato
-  min_embeddings_per_tracklet: 4  # mais embeddings = decisão mais estável
+  similarity_threshold: 0.52  # maior = menos matches duvidosos (precisão de ID)
+  top1_top2_margin: 0.12     # reforço contra confusão entre galería semelhante
+  min_embeddings_per_tracklet: 6  # média antes de aceitar decisão estável
   aggregate: mean
 
 oriented_crop:
@@ -51,7 +51,9 @@ oriented_crop:
 
 inference:
   frame_skip: 1  # process every N frames
+  # Redimensiona o lado longo no YOLO (4K/evitar “NMS time limit exceeded”); null = defeito Ultralytics
+  imgsz: 1280
   batch_embedding: true
   batch_size: 16
   require_classifier: true
-  crops_per_tracklet: 3  # quantas imagens salvar por tracklet (auto-cadastro/registro)
+  crops_per_tracklet: 4  # mais amostras por tracklet quando min_embeddings aumentou

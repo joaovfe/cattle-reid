@@ -3,3 +3,9 @@
 /resultados
 /core/data/ 
 .env
+*.__pycache__/
+*.egg-info/
+.ruff_cache/
+.pytest_cache/
+__pycache__/
+src/__pycache__/

@@ -5,10 +5,12 @@ POST /inference/video/job: aceita vídeo e retorna 202 + job_id (evita timeout H
 from __future__ import annotations
 
 import asyncio
+import base64
 import os
 import tempfile
 import uuid
 from collections import defaultdict
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +23,46 @@ from src.ai.reid.identity_decision import IdentityDecision, aggregate_embeddings
 from src.ai.metrics.count_metrics import compute_tracklet_evaluation_metrics
 
 router = APIRouter()
+_log = logging.getLogger(__name__)
+
+_inference_stdout = os.environ.get("INFERENCE_LOG_STDOUT", "1").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "",
+)
+
+
+def _configure_inference_logger() -> None:
+    """Garantir INFO no stderr (uvicorn não configura todos os named loggers)."""
+    _log.setLevel(logging.INFO)
+    if _log.handlers:
+        return
+    h = logging.StreamHandler()
+    h.setLevel(logging.INFO)
+    h.setFormatter(logging.Formatter("%(levelname)s [%(name)s] %(message)s"))
+    _log.addHandler(h)
+    _log.propagate = False
+
+
+_configure_inference_logger()
+
+
+def _speak_inference(msg: str) -> None:
+    """Espelha no stdout para consola/`uv run`/WatchFiles sempre visível."""
+    if _inference_stdout:
+        print(msg, flush=True)
+
+
+def _warn_missing_minio_for_annotated() -> None:
+    msg = (
+        "include_annotated_video está ativo mas MinIO não está ligado ao worker FastAPI "
+        "(MINIO_ENABLED=false, erro em get_minio_storage ou credenciais). "
+        "Não será enviado annotated_video_minio_key."
+    )
+    _log.warning(msg)
+    _speak_inference(f"[inferência] WARN — {msg}")
+
 
 _video_jobs: dict[str, dict[str, Any]] = {}
 _jobs_lock = asyncio.Lock()
@@ -28,11 +70,17 @@ _jobs_lock = asyncio.Lock()
 
 async def _minio_put_jpeg(storage, object_key: str, crop_bgr: np.ndarray, cv2) -> str:
     _, buf = cv2.imencode(".jpg", crop_bgr)
-    return await asyncio.to_thread(storage.put_bytes, object_key, buf.tobytes(), "image/jpeg")
+    b = storage.settings.crops_bucket()
+    return await asyncio.to_thread(
+        lambda: storage.put_bytes(object_key, buf.tobytes(), "image/jpeg", bucket=b)
+    )
 
 
 async def _minio_put_video_bytes(storage, object_key: str, content: bytes) -> str:
-    return await asyncio.to_thread(storage.put_bytes, object_key, content, "video/mp4")
+    b = storage.settings.videos_bucket()
+    return await asyncio.to_thread(
+        lambda: storage.put_bytes(object_key, content, "video/mp4", bucket=b)
+    )
 
 
 def _require_model_weights(
@@ -74,6 +122,15 @@ def _get_inference_components_from_config(config: dict):
         model_label="YOLO detector",
         expected_filename="best_cow.pt",
     )
+    inf_cfg = config.get("inference", {}) or {}
+    imgsz_raw = inf_cfg.get("imgsz")
+    try:
+        yolo_imgsz = int(imgsz_raw) if imgsz_raw is not None else None
+    except (TypeError, ValueError):
+        yolo_imgsz = None
+    if yolo_imgsz is not None and yolo_imgsz <= 0:
+        yolo_imgsz = None
+
     detector = YOLOCattleDetector(
         model_path=yolo_weights,
         conf_threshold=float(yolo_cfg.get("conf_threshold", 0.45)),
@@ -83,9 +140,10 @@ def _get_inference_components_from_config(config: dict):
         allowed_class_names=yolo_cfg.get("allowed_class_names"),
         device=yolo_cfg.get("device"),
         half=bool(yolo_cfg.get("half", True)),
+        imgsz=yolo_imgsz,
     )
     classifier = None
-    require_classifier = bool(config.get("inference", {}).get("require_classifier", True))
+    require_classifier = bool(inf_cfg.get("require_classifier", True))
     if cls_cfg.get("weights"):
         backend = str(cls_cfg.get("backend", "ultralytics")).lower()
         if backend == "ultralytics":
@@ -157,6 +215,8 @@ def _sync_video_inference_core(
 
     cap = cv2.VideoCapture(tmp_path)
     try:
+        fps_raw = cap.get(cv2.CAP_PROP_FPS)
+        video_fps = float(fps_raw) if fps_raw and float(fps_raw) > 1e-6 else 0.0
         while True:
             ret, frame = cap.read()
             if not ret:
@@ -231,6 +291,7 @@ def _sync_video_inference_core(
         "video_stem": video_stem,
         "upload_id": upload_id,
         "filename": filename or "upload",
+        "video_fps": video_fps,
     }
 
 
@@ -240,7 +301,7 @@ async def _persist_video_inference_to_db(
     faiss_store,
     content: bytes,
     core: dict[str, Any],
-) -> str | None:
+) -> tuple[str | None, dict[int, str]]:
     from core.database.session import async_session_factory
     from core.database.inference_persistence import save_inference_results
     from core.database.auto_enroll import auto_enroll_unknown_tracklets
@@ -262,6 +323,8 @@ async def _persist_video_inference_to_db(
     if minio_storage is not None:
         vkey = f"videos/{video_stem}_{upload_id}/source.mp4"
         video_storage_url = await _minio_put_video_bytes(minio_storage, vkey, content)
+
+    thumbnail_minio_keys_by_track: dict[int, str] = {}
 
     async with async_session_factory() as session:
         auto_enrolled = await auto_enroll_unknown_tracklets(
@@ -349,6 +412,8 @@ async def _persist_video_inference_to_db(
                     bbox = item.get("bbox")
                     if minio_storage is not None:
                         okey = f"crops/animal_{int(aid)}/{video_stem}_t{int(tid)}_f{frame_index}_{j}.jpg"
+                        if j == 0:
+                            thumbnail_minio_keys_by_track[int(tid)] = okey
                         stored_path = await _minio_put_jpeg(minio_storage, okey, crop_bgr, cv2)
                     else:
                         out_dir = Path(crops_dir) / f"animal_{int(aid)}"
@@ -387,12 +452,196 @@ async def _persist_video_inference_to_db(
         except Exception:
             pass
 
-    return video_storage_url
+    return video_storage_url, thumbnail_minio_keys_by_track
 
 
-def _build_video_json_response(core: dict[str, Any], video_storage_url: str | None, save_db: bool) -> dict[str, object]:
+def _render_annotated_video_and_upload_sync(
+    tmp_path: str,
+    core: dict[str, Any],
+    minio_storage,
+) -> str | None:
+    """Gera vídeo mp4 com caixas e IDs; envia ao bucket results do MinIO. Executa na threadpool."""
+    import os
+    import tempfile
+
+    import cv2
+
+    frame_detections_raw = core.get("frame_detections") or {}
+    frame_detections: dict[int, list[tuple[list[float], int]]] = {}
+    for k, v in frame_detections_raw.items():
+        try:
+            frame_detections[int(k)] = v  # type: ignore[assignment]
+        except (TypeError, ValueError):
+            continue
+
+    results: list = core.get("results") or []
+    tid_to_aid: dict[int, Any] = {}
+    for r in results:
+        tid = r.get("track_id")
+        if tid is None:
+            continue
+        tid_to_aid[int(tid)] = r.get("animal_id")
+
+    video_stem = str(core.get("video_stem") or "upload")
+    upload_id = str(core.get("upload_id") or "")
+
+    fd, out_path = tempfile.mkstemp(suffix=".mp4")
+    os.close(fd)
+
+    writer: Any = None
+    cap = cv2.VideoCapture(tmp_path)
+    try:
+        if not cap.isOpened():
+            os.unlink(out_path)
+            return None
+
+        fps = float(core.get("video_fps") or 0)
+        if fps <= 1e-6:
+            fps = float(cap.get(cv2.CAP_PROP_FPS)) or 25.0
+        w = max(1, int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)))
+        h = max(1, int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        writer = cv2.VideoWriter(out_path, fourcc, float(fps), (w, h))
+        if not writer.isOpened():
+            os.unlink(out_path)
+            return None
+
+        frame_idx = 0
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            for item in frame_detections.get(frame_idx, []):
+                if not item or len(item) < 2:
+                    continue
+                bbox = item[0]
+                tid = item[1]
+                if bbox is None or len(bbox) < 4:
+                    continue
+                try:
+                    x1 = int(max(0.0, float(bbox[0])))
+                    y1 = int(max(0.0, float(bbox[1])))
+                    x2 = int(min(float(w - 1), float(bbox[2])))
+                    y2 = int(min(float(h - 1), float(bbox[3])))
+                except (TypeError, ValueError):
+                    continue
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 200, 0), 2)
+                aid = tid_to_aid.get(int(tid))
+                lab = f"T{int(tid)}"
+                if aid is not None:
+                    lab = f"{lab} ID:{aid}"
+                cv2.putText(
+                    frame,
+                    lab,
+                    (x1, max(y1 - 8, 16)),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.52,
+                    (0, 255, 0),
+                    2,
+                )
+            writer.write(frame)
+            frame_idx += 1
+    finally:
+        if writer is not None:
+            try:
+                writer.release()
+            except Exception:
+                pass
+        cap.release()
+
+    try:
+        with open(out_path, "rb") as f:
+            data_b = f.read()
+        os.unlink(out_path)
+    except OSError:
+        return None
+
+    if not data_b:
+        return None
+
+    key = f"annotated/{video_stem}_{upload_id}/overlay.mp4"
+    bkt = minio_storage.settings.results_bucket()
+    try:
+        minio_storage.put_bytes(key, data_b, "video/mp4", bucket=bkt)
+    except Exception:
+        _log.exception(
+            "Falha ao enviar vídeo anotado ao MinIO bucket=%s key=%s (bytes=%s)",
+            bkt,
+            key,
+            len(data_b),
+        )
+        return None
+    _log.info("Vídeo anotado gravado em MinIO bucket=%s key=%s", bkt, key)
+    _speak_inference(f"[inferência] vídeo anotado MinIO ok bucket={bkt} key={key}")
+    return key
+
+
+def _xyxy_list_to_bbox_dict(bbox: object) -> dict[str, float] | None:
+    if not bbox or not isinstance(bbox, (list, tuple)) or len(bbox) < 4:
+        return None
+    try:
+        x1, y1, x2, y2 = float(bbox[0]), float(bbox[1]), float(bbox[2]), float(bbox[3])
+    except (TypeError, ValueError):
+        return None
+    return {"x": x1, "y": y1, "w": x2 - x1, "h": y2 - y1}
+
+
+def _build_video_json_response(
+    core: dict[str, Any],
+    video_storage_url: str | None,
+    save_db: bool,
+    *,
+    thumbnail_minio_keys_by_track: dict[int, str],
+    include_thumbnails: bool = False,
+    max_thumbnail_tracklets: int = 50,
+) -> dict[str, object]:
+    import cv2
+
     results = core["results"]
     eval_metrics = compute_tracklet_evaluation_metrics(results)
+    tracklet_crops: dict[int, list] = core.get("tracklet_crops") or {}
+    fps = float(core.get("video_fps") or 0)
+
+    tracklets_payload: list[dict[str, object]] = []
+    thumb_budget = max(0, int(max_thumbnail_tracklets))
+    for r in results:
+        tid_raw = r.get("track_id")
+        tid_int = int(tid_raw) if tid_raw is not None else None
+        row: dict[str, object] = {
+            "track_id": r["track_id"],
+            "num_embeddings": r["num_embeddings"],
+            "animal_id": r["animal_id"],
+            "score": r["score"],
+        }
+        if tid_int is not None:
+            first_items = tracklet_crops.get(tid_int) or []
+            first = first_items[0] if first_items else None
+            bbox_raw = first.get("bbox") if isinstance(first, dict) else None
+            bbox_norm = _xyxy_list_to_bbox_dict(bbox_raw)
+            fi = int(first.get("frame_index") or 0) if isinstance(first, dict) else None
+            if bbox_norm:
+                row["bounding_box"] = bbox_norm
+            if fi is not None:
+                row["frame_index"] = fi
+                if fps > 1e-6:
+                    row["frame_timestamp"] = float(fi) / fps
+
+            tk = thumbnail_minio_keys_by_track.get(tid_int)
+            if tk:
+                row["thumbnail_minio_key"] = tk
+
+            if include_thumbnails and thumb_budget > 0 and isinstance(first, dict):
+                crop_bgr = first.get("crop_bgr")
+                if crop_bgr is not None:
+                    try:
+                        _, buf = cv2.imencode(".jpg", crop_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+                        row["crop_base64"] = base64.b64encode(buf.tobytes()).decode("ascii")
+                        thumb_budget -= 1
+                    except Exception:
+                        pass
+
+        tracklets_payload.append(row)
+
     out: dict[str, object] = {
         "frames_processed": core["frame_idx"],
         "count": core["count"],
@@ -405,14 +654,92 @@ def _build_video_json_response(core: dict[str, Any], video_storage_url: str | No
             "duplicate_animals": eval_metrics.duplicate_animals,
             "predicted_count": eval_metrics.predicted_count,
         },
-        "tracklets": [
-            {"track_id": r["track_id"], "num_embeddings": r["num_embeddings"], "animal_id": r["animal_id"], "score": r["score"]}
-            for r in results
-        ],
+        "tracklets": tracklets_payload,
     }
     if save_db and video_storage_url:
         out["video_storage_url"] = video_storage_url
     return out
+
+
+def _announce_pipeline_core_done(core: dict[str, Any], *, filename: str) -> None:
+    fd = core.get("frame_detections") or {}
+    if not isinstance(fd, dict):
+        fd = {}
+    frames_with_boxes = sum(1 for v in fd.values() if v)
+    boxes = sum(len(v) for v in fd.values() if isinstance(v, list))
+    results = core.get("results") or []
+    n_res = len(results) if isinstance(results, list) else 0
+    msg = (
+        f"ficheiro={filename!r} frames_lidos={core.get('frame_idx')} "
+        f"frames_com_bbox={frames_with_boxes} bbox_em_frames={boxes} "
+        f"tracklets={n_res} count={core.get('count')} únicos_ReID={core.get('unique_identified')}"
+    )
+    _log.info("Pipeline vídeo termina — %s", msg)
+    _speak_inference(f"[inferência pipeline] {msg}")
+
+
+def _summarize_inference_out_for_log(out: dict[str, Any]) -> dict[str, Any]:
+    raw = out.get("tracklets")
+    if not isinstance(raw, list):
+        return {"tracklets_len": 0}
+    thumb_key = crop_b64 = 0
+    sample: list[dict[str, Any]] = []
+    for t in raw:
+        if not isinstance(t, dict):
+            continue
+        if t.get("thumbnail_minio_key"):
+            thumb_key += 1
+        crop_b64_val = t.get("crop_base64")
+        if isinstance(crop_b64_val, str) and crop_b64_val.strip():
+            crop_b64 += 1
+
+    for t in raw[:10]:
+        if not isinstance(t, dict):
+            continue
+        cb = t.get("crop_base64")
+        sample.append(
+            {
+                "track_id": t.get("track_id"),
+                "animal_id": t.get("animal_id"),
+                "score": t.get("score"),
+                "thumbnail_minio_key": bool(t.get("thumbnail_minio_key")),
+                "crop_base64": isinstance(cb, str) and len(cb) > 0,
+            },
+        )
+    return {
+        "tracklets_len": len(raw),
+        "tracklets_com_thumbnail_minio": thumb_key,
+        "tracklets_com_crop_base64": crop_b64,
+        "primeiros_tracklets": sample,
+    }
+
+
+def _log_inference_out_para_consumidor(
+    out: dict[str, Any],
+    *,
+    tag: str,
+    filename: str,
+) -> None:
+    resume = _summarize_inference_out_for_log(out)
+    _log.info(
+        "Inferência vídeo (%s): resposta cattle-api/downstream arquivo=%s count=%s unique=%s frames=%s "
+        "classificação=%s auto_matriculas=%s metrics=%s annotated_minio=%s detail=%s",
+        tag,
+        filename,
+        out.get("count"),
+        out.get("unique_identified"),
+        out.get("frames_processed"),
+        out.get("classification_enabled"),
+        out.get("auto_enrolled"),
+        out.get("metrics"),
+        bool(out.get("annotated_video_minio_key")),
+        resume,
+    )
+    _speak_inference(
+        f"[inferência → cattle-api] ({tag}) arquivo={filename!r} count={out.get('count')} "
+        f"unique={out.get('unique_identified')} annotated_minio={bool(out.get('annotated_video_minio_key'))} "
+        f"resumo={resume}",
+    )
 
 
 @router.post("/video/job")
@@ -420,6 +747,20 @@ async def inference_video_submit_job(
     request: Request,
     file: UploadFile = File(...),
     save_db: bool = Query(False, description="Persist tracklets and count event to PostgreSQL"),
+    include_thumbnails: bool = Query(
+        False,
+        description="Incluir crop JPEG base64 nos tracklets (limite máx. por max_thumbnail_tracklets); aumenta payload",
+    ),
+    max_thumbnail_tracklets: int = Query(
+        50,
+        ge=0,
+        le=500,
+        description="Máximo de tracklets que recebem crop_base64 quando include_thumbnails=true",
+    ),
+    include_annotated_video: bool = Query(
+        True,
+        description="Gerar vídeo mp4 com overlays (MinIO bucket results); precisa MinIO ativo",
+    ),
 ):
     """
     Enfileira inferência de vídeo e responde na hora com job_id.
@@ -470,15 +811,39 @@ async def inference_video_submit_job(
                 upload_id,
                 store,
             )
-            video_storage_url = None
+            _announce_pipeline_core_done(core, filename=filename)
+            annotated_minio_key: str | None = None
+            if include_annotated_video and minio_storage is None:
+                _warn_missing_minio_for_annotated()
+            if include_annotated_video and minio_storage is not None:
+                annotated_minio_key = await run_in_threadpool(
+                    _render_annotated_video_and_upload_sync,
+                    path_for_worker,
+                    core,
+                    minio_storage,
+                )
+            persist_thumb_keys: dict[int, str] = {}
+            video_storage_url: str | None = None
             if save_db:
-                video_storage_url = await _persist_video_inference_to_db(
+                video_storage_url, persist_thumb_keys = await _persist_video_inference_to_db(
                     minio_storage=minio_storage,
                     faiss_store=store,
                     content=content,
                     core=core,
                 )
-            out = _build_video_json_response(core, video_storage_url, save_db)
+            out = _build_video_json_response(
+                core,
+                video_storage_url,
+                save_db,
+                thumbnail_minio_keys_by_track=persist_thumb_keys,
+                include_thumbnails=include_thumbnails,
+                max_thumbnail_tracklets=max_thumbnail_tracklets,
+            )
+            if annotated_minio_key:
+                out["annotated_video_minio_key"] = annotated_minio_key
+            _log_inference_out_para_consumidor(
+                out, tag=f"async_job:{job_id}", filename=filename
+            )
             async with _jobs_lock:
                 _video_jobs[job_id] = {"status": "completed", "filename": filename, "result": out}
         except Exception as e:
@@ -517,6 +882,15 @@ async def inference_video(
     request: Request,
     file: UploadFile = File(...),
     save_db: bool = Query(False, description="Persist tracklets and count event to PostgreSQL"),
+    include_thumbnails: bool = Query(
+        False,
+        description="Incluir crop JPEG base64 por tracklet (limitado por max_thumbnail_tracklets)",
+    ),
+    max_thumbnail_tracklets: int = Query(50, ge=0, le=500),
+    include_annotated_video: bool = Query(
+        True,
+        description="Gerar vídeo mp4 com overlays e enviar ao MinIO (bucket results)",
+    ),
 ):
     """Upload video; detection (YOLOv11) -> tracking -> crop -> embed (DINOv3) -> Re-ID. Returns count and metrics."""
     content = await file.read()
@@ -554,15 +928,39 @@ async def inference_video(
             upload_id,
             store,
         )
-        video_storage_url = None
+        _announce_pipeline_core_done(core, filename=filename)
+        annotated_minio_key: str | None = None
+        minio_st = getattr(request.app.state, "minio", None)
+        if include_annotated_video and minio_st is None:
+            _warn_missing_minio_for_annotated()
+        if include_annotated_video and minio_st is not None:
+            annotated_minio_key = await run_in_threadpool(
+                _render_annotated_video_and_upload_sync,
+                tmp_path,
+                core,
+                minio_st,
+            )
+        persist_thumb_keys: dict[int, str] = {}
+        video_storage_url: str | None = None
         if save_db:
-            video_storage_url = await _persist_video_inference_to_db(
-                minio_storage=getattr(request.app.state, "minio", None),
+            video_storage_url, persist_thumb_keys = await _persist_video_inference_to_db(
+                minio_storage=minio_st,
                 faiss_store=store,
                 content=content,
                 core=core,
             )
-        return _build_video_json_response(core, video_storage_url, save_db)
+        out = _build_video_json_response(
+            core,
+            video_storage_url,
+            save_db,
+            thumbnail_minio_keys_by_track=persist_thumb_keys,
+            include_thumbnails=include_thumbnails,
+            max_thumbnail_tracklets=max_thumbnail_tracklets,
+        )
+        if annotated_minio_key:
+            out["annotated_video_minio_key"] = annotated_minio_key
+        _log_inference_out_para_consumidor(out, tag="sync_post", filename=filename)
+        return out
     finally:
         if tmp_path:
             try:

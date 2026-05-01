@@ -162,6 +162,13 @@ def main() -> None:
         model_label="YOLO detector",
         expected_filename="best_cow.pt",
     )
+    inf_imgs = config.get("inference", {}).get("imgsz")
+    try:
+        yolo_imgsz = int(inf_imgs) if inf_imgs is not None else None
+    except (TypeError, ValueError):
+        yolo_imgsz = None
+    if yolo_imgsz is not None and yolo_imgsz <= 0:
+        yolo_imgsz = None
     detector = YOLOCattleDetector(
         model_path=yolo_weights,
         conf_threshold=float(yolo_cfg.get("conf_threshold", 0.45)),
@@ -170,6 +177,7 @@ def main() -> None:
         allowed_class_ids=yolo_cfg.get("allowed_class_ids"),
         allowed_class_names=yolo_cfg.get("allowed_class_names"),
         half=yolo_cfg.get("half", True),
+        imgsz=yolo_imgsz,
     )
     cls_weights = None
     if cls_cfg.get("weights"):
@@ -344,11 +352,20 @@ def main() -> None:
 
     if args.save_db:
         async def _persist():
+            import cv2
             from core.database.session import async_session_factory
             from core.database.inference_persistence import save_inference_results
             from core.database.auto_enroll import auto_enroll_unknown_tracklets
             from core.database.models import Tracklet
+            from core.storage.minio_storage import get_minio_storage
             from sqlalchemy import select
+
+            minio_storage = get_minio_storage()
+            if minio_storage is not None:
+                try:
+                    minio_storage.ensure_bucket()
+                except Exception:
+                    pass
 
             async with async_session_factory() as session:
                 aggregated_by_tid: dict[int, np.ndarray] = {}
@@ -406,7 +423,9 @@ def main() -> None:
 
                 crops_payload: list[dict[str, object]] = []
                 crops_dir = repo_root() / "core" / "data" / "crops"
-                crops_dir.mkdir(parents=True, exist_ok=True)
+                if minio_storage is None:
+                    crops_dir.mkdir(parents=True, exist_ok=True)
+                stem = video_path.stem
                 for r in results:
                     tid = r.get("track_id")
                     aid = r.get("animal_id")
@@ -416,18 +435,40 @@ def main() -> None:
                         crop_bgr = item["crop_bgr"]
                         frame_index = int(item.get("frame_index") or 0)
                         bbox = item.get("bbox")
-                        out_dir = Path(crops_dir) / f"animal_{int(aid)}"
-                        out_dir.mkdir(parents=True, exist_ok=True)
-                        out_path = out_dir / f"{video_path.stem}_t{int(tid)}_f{frame_index}_{j}.jpg"
-                        cv2.imwrite(str(out_path), crop_bgr)
+                        okey = f"crops/animal_{int(aid)}/{stem}_t{int(tid)}_f{frame_index}_{j}.jpg"
+                        if minio_storage is not None:
+                            _, buf = cv2.imencode(
+                                ".jpg",
+                                crop_bgr,
+                                [int(cv2.IMWRITE_JPEG_QUALITY), 92],
+                            )
+                            bkt = minio_storage.settings.crops_bucket()
+                            stored_path = minio_storage.put_bytes(
+                                okey,
+                                buf.tobytes(),
+                                "image/jpeg",
+                                bucket=bkt,
+                            )
+                            storage_kind = "minio"
+                        else:
+                            out_dir = Path(crops_dir) / f"animal_{int(aid)}"
+                            out_dir.mkdir(parents=True, exist_ok=True)
+                            out_path = out_dir / f"{stem}_t{int(tid)}_f{frame_index}_{j}.jpg"
+                            cv2.imwrite(str(out_path), crop_bgr)
+                            stored_path = str(out_path)
+                            storage_kind = "local"
                         crops_payload.append(
                             {
                                 "animal_id": int(aid),
                                 "tracklet_id": tracklet_id_by_track.get(int(tid)),
-                                "source_path": str(out_path),
+                                "source_path": stored_path,
                                 "frame_index": frame_index,
                                 "bbox": bbox,
-                                "metadata": {"video_source": str(video_path.resolve()), "track_id": int(tid)},
+                                "metadata": {
+                                    "video_source": str(video_path.resolve()),
+                                    "track_id": int(tid),
+                                    "storage": storage_kind,
+                                },
                             }
                         )
                 await save_inference_results(
