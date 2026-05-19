@@ -1,7 +1,38 @@
-# YOLO training config (cattle detection)
-data: data.yaml  # path to dataset root data.yaml
-model: yolov8n.pt
-epochs: 100
-batch: 16
-imgsz: 640
-patience: 20
+# Treinamento YOLO26 — detecção de bovinos em visão aérea (nadir)
+# Usado por: uv run python -m src.training.train_yolo --data <dataset>/data.yaml
+
+model: yolo26m.pt      # base: yolo26m.pt | yolo26n.pt | yolov8n.pt
+epochs: 300
+batch: 8               # auto-reduzido para 4 se GPU < 16 GB
+imgsz: 1280            # alta resolução para animais pequenos em altitude
+
+optimizer: AdamW
+lr0: 0.001
+lrf: 0.01
+momentum: 0.937
+weight_decay: 0.0005
+warmup_epochs: 5
+patience: 50
+
+box: 7.5
+cls: 0.5
+dfl: 1.5
+
+# Augmentação — vista aérea nadir
+degrees: 180
+translate: 0.1
+scale: 0.9
+flipud: 0.5
+fliplr: 0.5
+mosaic: 1.0
+mixup: 0.2
+copy_paste: 0.3
+erasing: 0.4
+auto_augment: randaugment
+close_mosaic: 15
+
+amp: true
+cache: disk
+cos_lr: true
+rect: false
+save_period: 25
