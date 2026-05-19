@@ -40,7 +40,7 @@ tracking:
   iou_threshold: 0.28  # ≥ match com IoU; menor = menos troca de track_id por jitter
 
 reid:
-  similarity_threshold: 0.52  # maior = menos matches duvidosos (precisão de ID)
+  similarity_threshold: 0.4530  # τ calibrado no treino Re-ID (época 16, Recall@1=0.996)
   top1_top2_margin: 0.12     # reforço contra confusão entre galería semelhante
   min_embeddings_per_tracklet: 6  # média antes de aceitar decisão estável
   aggregate: mean
