@@ -39,6 +39,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--freeze", type=int, default=10,
                    help="Número de camadas do backbone a congelar no fine-tuning")
     p.add_argument("--device", default="", help="cuda, cpu, ou '' para auto-detectar")
+    p.add_argument("--cache", default="disk",
+                   help="Cache de imagens: 'disk' (seguro), 'ram' ou False")
+    p.add_argument("--patience", type=int, default=30,
+                   help="Early stopping: épocas sem melhora antes de parar")
     return p.parse_args()
 
 
@@ -91,6 +95,7 @@ def main() -> None:
     model = YOLO(model_path)
 
     # ─── Hiperparâmetros comuns ────────────────────────────────────────────────
+    cache_val = args.cache if args.cache in ("disk", "ram") else False
     common = dict(
         data=str(data_yaml),
         epochs=args.epochs,
@@ -101,9 +106,9 @@ def main() -> None:
         name=args.name,
         val=True,
         plots=True,
-        save_period=25,
+        save_period=10,
         amp=True,       # FP16
-        cache=True,     # cache imagens em RAM
+        cache=cache_val,
         cos_lr=True,    # cosine annealing
         device=args.device or None,
     )
@@ -121,7 +126,7 @@ def main() -> None:
             momentum=0.937,
             weight_decay=0.0005,
             warmup_epochs=3,
-            patience=30,
+            patience=args.patience,
             # Augmentação moderada (não agressiva como no treino base)
             degrees=180,
             translate=0.05,
@@ -150,7 +155,7 @@ def main() -> None:
             weight_decay=0.0005,
             warmup_epochs=5,
             warmup_momentum=0.8,
-            patience=50,
+            patience=args.patience,
             # Augmentação agressiva para visão aérea
             degrees=180,        # rotação completa: sem orientação definida no nadir
             translate=0.1,
