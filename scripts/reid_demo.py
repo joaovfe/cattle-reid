@@ -72,7 +72,7 @@ def main():
 
     import yaml
     from src.ai.detection.yolo_detector import YOLOCattleDetector
-    from src.ai.tracking.bytetrack_tracker import ByteTrackTracker
+    from src.ai.tracking.bytetrack_tracker import ByteTrackTracker, TrackerConfig
     from src.ai.oriented_crop.cropper import OrientedCropper
     from src.ai.embedding.dino_encoder import CattleEmbeddingEncoder
     from src.ai.reid.faiss_store import FAISSStore
@@ -89,13 +89,15 @@ def main():
 
     print("[1/5] Carregando modelos...")
     detector  = YOLOCattleDetector(
-        weights=yolo_cfg["weights"],
-        conf=yolo_cfg.get("conf_threshold", 0.43),
-        iou=yolo_cfg.get("iou_threshold", 0.52),
+        model_path=yolo_cfg["weights"],
+        conf_threshold=yolo_cfg.get("conf_threshold", 0.43),
+        iou_threshold=yolo_cfg.get("iou_threshold", 0.52),
     )
     tracker   = ByteTrackTracker(
-        max_age=track_cfg.get("max_age", 35),
-        iou_threshold=track_cfg.get("iou_threshold", 0.28),
+        config=TrackerConfig(
+            max_age=track_cfg.get("max_age", 35),
+            iou_threshold=track_cfg.get("iou_threshold", 0.28),
+        )
     )
     cropper   = OrientedCropper(
         output_size=crop_cfg.get("output_size", 224),
@@ -166,7 +168,7 @@ def main():
                 agg = aggregate_embeddings(tracklet_embeddings[tid])
 
                 # Tenta identificar contra galeria
-                if store.size > 0:
+                if len(store) > 0:
                     animal_id, score = decision.decide(agg, store, top_k=5)
                 else:
                     animal_id, score = None, 0.0
