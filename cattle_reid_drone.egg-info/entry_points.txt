@@ -1,2 +1,0 @@
-[console_scripts]
-cattle-reid-drone = cattle_reid_drone:main

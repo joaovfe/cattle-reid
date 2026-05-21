@@ -1,3 +1,0 @@
-cattle_reid_drone
-core
-src
