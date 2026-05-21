@@ -127,8 +127,13 @@ async def _enroll_gallery(
             if not dry_run:
                 animal_ids = [int(animal.id)] * len(embeddings)
                 store.add_batch(animal_ids, embeddings)
-                for _ in animal_ids:
-                    session.add(EmbeddingRef(animal_id=int(animal.id)))
+                for emb in embeddings:
+                    session.add(
+                        EmbeddingRef(
+                            animal_id=int(animal.id),
+                            embedding=np.asarray(emb, dtype=np.float32).ravel().tolist(),
+                        )
+                    )
 
             total_animals += 1
             total_images += len(crops)
@@ -152,7 +157,7 @@ def main() -> None:
 
     load_repo_dotenv()
 
-    parser = argparse.ArgumentParser(description="Enroll gallery images for cattle Re-ID")
+    parser = argparse.ArgumentParser(description="Enroll gallery images for Novus Re-ID")
     parser.add_argument("--gallery_dir", type=str, default="gallery_images")
     parser.add_argument("--config", type=str, default="configs/default.yaml")
     parser.add_argument("--faiss", type=str, default=None)

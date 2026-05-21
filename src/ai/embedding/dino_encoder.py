@@ -1,5 +1,5 @@
 """
-Embedding encoder for cattle crops: DINOv3 or DINOv2 via HuggingFace.
+Embedding encoder for Novus crops: DINOv3 or DINOv2 via HuggingFace.
 Crops (BGR or RGB) -> L2-normalized embeddings.
 """
 from __future__ import annotations
@@ -18,7 +18,7 @@ DINOV2_SMALL = "facebook/dinov2-small"
 
 class CattleEmbeddingEncoder:
     """
-    Extract global embeddings from cattle crops using DINOv3 or DINOv2 (HuggingFace).
+    Extract global embeddings from bovine crops using DINOv3 or DINOv2 (HuggingFace).
     Default: DINOv3 (facebook/dinov3-vits16-pretrain-lvd1689m). Para DINOv2 use model_name=
     facebook/dinov2-small.
     """

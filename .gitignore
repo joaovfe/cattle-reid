@@ -1,5 +1,53 @@
+# Ambiente e dependências
+.venv/
+.uvenv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+
+# Dados locais e grandes (não versionar)
 /videos/
-.venv
-/resultados
-/core/data/ 
+/videos 2/
+/resultados/
+/core/data/
+/data/
+/dataset/
+/dataset_frames/
+/runs/
+
+# Modelos de ML (pesados — usar releases ou LFS)
+*.pt
+*.pth
+*.onnx
+*.bin
+*.safetensors
+*.h5
+*.pkl
+*.joblib
+
+# Credenciais e segredos
 .env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+*_secret*
+secrets.*
+
+# Vídeos e mídia pesada
+*.mp4
+*.avi
+*.mov
+*.mkv
+
+# Arquivos de cache e temporários
+*.cache
+*.tmp
+/tmp/
+.DS_Store
+
+# Documentos Word temporários
+~$*

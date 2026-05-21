@@ -46,12 +46,15 @@ async def save_inference_results(
         if tid is None:
             continue
         start_frame, end_frame = track_ranges.get(tid, (0, 0))
+        cls_info = r.get("classification") or {}
         t = Tracklet(
             video_source=video_source,
             start_frame=start_frame,
             end_frame=end_frame,
             track_id=tid,
             resolved_animal_id=r.get("animal_id"),
+            posture_label=cls_info.get("label"),
+            posture_score=cls_info.get("score"),
         )
         session.add(t)
         await session.flush()

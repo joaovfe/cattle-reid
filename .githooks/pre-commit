@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+# Novus pre-commit: bloqueia arquivos grandes, modelos e credenciais
+
+set -euo pipefail
+
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+ERRORS=0
+MAX_SIZE_MB=10
+
+# 1. Arquivos grandes (> 10 MB)
+while IFS= read -r file; do
+  if [ -f "$file" ]; then
+    size=$(stat -c%s "$file" 2>/dev/null || stat -f%z "$file" 2>/dev/null || echo 0)
+    size_mb=$(( size / 1024 / 1024 ))
+    if [ "$size_mb" -ge "$MAX_SIZE_MB" ]; then
+      echo -e "${RED}[BLOQUEADO] Arquivo grande (${size_mb}MB): $file${NC}"
+      echo "  Use Git LFS ou adicione ao .gitignore."
+      ERRORS=$(( ERRORS + 1 ))
+    fi
+  fi
+done < <(git diff --cached --name-only --diff-filter=ACM)
+
+# 2. Modelos de ML (.pt, .pth, .bin, .onnx, .h5, .pkl, .joblib)
+while IFS= read -r file; do
+  case "$file" in
+    *.pt|*.pth|*.bin|*.onnx|*.h5|*.pkl|*.joblib|*.safetensors)
+      echo -e "${RED}[BLOQUEADO] Arquivo de modelo ML: $file${NC}"
+      echo "  Adicione ao .gitignore ou use Git LFS."
+      ERRORS=$(( ERRORS + 1 ))
+      ;;
+  esac
+done < <(git diff --cached --name-only --diff-filter=ACM)
+
+# 3. Arquivos sensíveis
+SENSITIVE_PATTERNS=(".env" "*.pem" "*.key" "credentials.json" "secrets.*" "*_secret*" "*token*" "id_rsa" "*.pfx" "*.p12")
+while IFS= read -r file; do
+  basename_file=$(basename "$file")
+  for pattern in "${SENSITIVE_PATTERNS[@]}"; do
+    # shellcheck disable=SC2053
+    if [[ "$basename_file" == $pattern ]]; then
+      echo -e "${RED}[BLOQUEADO] Arquivo sensível: $file${NC}"
+      echo "  Nunca commite credenciais. Adicione ao .gitignore."
+      ERRORS=$(( ERRORS + 1 ))
+      break
+    fi
+  done
+done < <(git diff --cached --name-only --diff-filter=ACM)
+
+# 4. Strings suspeitas no diff
+SUSPICIOUS=$(git diff --cached | grep -E '(password|secret|api_key|access_key|private_key)\s*=\s*["\047][^"\047]{8,}' --ignore-case || true)
+if [ -n "$SUSPICIOUS" ]; then
+  echo -e "${YELLOW}[AVISO] Possíveis credenciais hardcoded detectadas:${NC}"
+  echo "$SUSPICIOUS" | head -5
+fi
+
+if [ "$ERRORS" -gt 0 ]; then
+  echo -e "\n${RED}Commit bloqueado: $ERRORS problema(s) encontrado(s).${NC}"
+  exit 1
+fi
+
+exit 0

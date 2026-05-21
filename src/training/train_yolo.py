@@ -33,7 +33,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--imgsz", type=int, default=1280)
     p.add_argument("--workers", type=int, default=8)
     p.add_argument("--project", default="runs/detect")
-    p.add_argument("--name", default="cattle_yolo26_v1")
+    p.add_argument("--name", default="novus_yolo26_v1")
     p.add_argument("--finetune", action="store_true",
                    help="Modo fine-tuning: lr menor, menos augmentação, backbone congelado")
     p.add_argument("--freeze", type=int, default=10,

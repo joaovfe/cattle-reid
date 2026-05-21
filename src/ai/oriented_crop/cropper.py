@@ -38,7 +38,7 @@ def crop_bbox(
 
 
 class OrientedCropper:
-    """Crops cattle regions from frame; minimal implementation with bbox + padding."""
+    """Crops bovine regions from frame; minimal implementation with bbox + padding."""
 
     def __init__(self, output_size: int = 224, padding: float = 0.1) -> None:
         self.output_size = output_size

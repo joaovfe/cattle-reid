@@ -1,5 +1,5 @@
 """
-YOLO-based cattle detector. Frame BGR in -> list of detections (bbox, score, class).
+YOLO-based bovine detector. Frame BGR in -> list of detections (bbox, score, class).
 """
 from __future__ import annotations
 

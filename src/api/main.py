@@ -8,7 +8,7 @@ from fastapi import FastAPI
 
 load_repo_dotenv()
 
-from src.api.routes import animals, inference, events, health
+from src.api.routes import animals, inference, events, health, tracklets
 
 
 async def lifespan(app: FastAPI):
@@ -21,6 +21,8 @@ async def lifespan(app: FastAPI):
         storage = get_minio_storage()
         if storage is not None:
             storage.ensure_bucket()
+            storage.ensure_bucket(storage.crops_bucket)
+            storage.ensure_bucket(storage.videos_bucket)
             app.state.minio = storage
     except Exception:
         # API segue sem MinIO (ex.: dev sem container); uploads usam disco local.
@@ -44,7 +46,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Cattle Re-ID Drone API",
+    title="Novus API",
     description="Identificação de bovinos por drone: enrollment, inferência, eventos.",
     version="0.1.0",
     lifespan=lifespan,
@@ -54,8 +56,9 @@ app.include_router(health.router, tags=["health"])
 app.include_router(animals.router, prefix="/animals", tags=["animals"])
 app.include_router(inference.router, prefix="/inference", tags=["inference"])
 app.include_router(events.router, prefix="/events", tags=["events"])
+app.include_router(tracklets.router, prefix="/tracklets", tags=["tracklets"])
 
 
 @app.get("/")
 async def root():
-    return {"service": "cattle-reid-drone", "docs": "/docs"}
+    return {"service": "novus", "docs": "/docs"}

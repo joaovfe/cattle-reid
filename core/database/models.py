@@ -6,9 +6,13 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from pgvector.sqlalchemy import Vector
+
+
+EMBEDDING_DIMENSION = 384
 
 
 class Base(DeclarativeBase):
@@ -31,6 +35,7 @@ class EmbeddingRef(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     animal_id: Mapped[int] = mapped_column(ForeignKey("animals.id"), nullable=False, index=True)
     source_image_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIMENSION), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -43,6 +48,8 @@ class Tracklet(Base):
     end_frame: Mapped[int] = mapped_column(Integer, default=0)
     track_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     resolved_animal_id: Mapped[int | None] = mapped_column(ForeignKey("animals.id"), nullable=True, index=True)
+    posture_label: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    posture_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -82,4 +89,3 @@ class AnimalCrop(Base):
     bbox: Mapped[list[float] | None] = mapped_column(JSONB, nullable=True)
     metadata_: Mapped[dict[str, Any] | None] = mapped_column("metadata", JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-
