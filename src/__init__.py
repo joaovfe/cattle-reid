@@ -1,1 +1,1 @@
-# Application code and API (cattle-reid-drone)
+# Application code and API (novus)

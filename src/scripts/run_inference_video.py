@@ -110,7 +110,7 @@ def _aggregate_classifications(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run cattle Re-ID pipeline on video")
+    parser = argparse.ArgumentParser(description="Run Novus Re-ID pipeline on video")
     parser.add_argument("--video", type=str, required=True)
     parser.add_argument("--config", type=str, default="configs/default.yaml")
     parser.add_argument("--faiss", type=str, default=None, help="Path to FAISS index (e.g. core/data/faiss_index)")

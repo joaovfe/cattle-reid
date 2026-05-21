@@ -1,0 +1,31 @@
+# Classificador de postura/comportamento de bovinos (YOLOv8-cls)
+# Classes: em_pe | deitado | caido
+# Usado por: uv run python -m src.training.train_classify --data data/classify
+
+model: yolov8s-cls.pt   # yolov8n-cls.pt (rápido) | yolov8s-cls.pt | yolov8m-cls.pt
+epochs: 50
+batch: 32
+imgsz: 224              # alinhado com oriented_crop.output_size do pipeline
+
+optimizer: AdamW
+lr0: 0.001
+lrf: 0.01
+momentum: 0.937
+weight_decay: 0.0005
+warmup_epochs: 3
+patience: 20
+
+# Augmentação — crops dorsais
+degrees: 180
+flipud: 0.5
+fliplr: 0.5
+hsv_h: 0.015
+hsv_s: 0.7
+hsv_v: 0.4
+erasing: 0.3
+mixup: 0.1
+auto_augment: randaugment
+
+amp: true
+cos_lr: true
+save_period: 10

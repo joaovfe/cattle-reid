@@ -1,5 +1,5 @@
 """
-FAISS index for cattle embeddings: add, search, rebuild, persist to disk.
+FAISS index for Novus embeddings: add, search, rebuild, persist to disk.
 """
 from __future__ import annotations
 
