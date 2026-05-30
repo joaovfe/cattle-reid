@@ -352,6 +352,7 @@ def main() -> None:
 
     if args.save_db:
         async def _persist():
+            import uuid as _uuid
             import cv2
             from core.database.session import async_session_factory
             from core.database.inference_persistence import save_inference_results
@@ -359,6 +360,7 @@ def main() -> None:
             from core.database.models import Tracklet
             from core.storage.minio_storage import get_minio_storage
             from sqlalchemy import select
+            run_id = str(_uuid.uuid4())
 
             minio_storage = get_minio_storage()
             if minio_storage is not None:
@@ -465,7 +467,9 @@ def main() -> None:
                                 "frame_index": frame_index,
                                 "bbox": bbox,
                                 "metadata": {
-                                    "video_source": str(video_path.resolve()),
+                                    "video_source": video_path.name,
+                                    "video_path": str(video_path.resolve()),
+                                    "run_id": run_id,
                                     "track_id": int(tid),
                                     "storage": storage_kind,
                                 },
@@ -481,6 +485,10 @@ def main() -> None:
                     extra_events=events_payload,
                 )
                 await session.commit()
+                try:
+                    store.save()
+                except Exception:
+                    pass
         asyncio.run(_persist())
         print("Resultados salvos no banco (tracklets + evento count_summary).")
         eval_metrics = compute_tracklet_evaluation_metrics(results)

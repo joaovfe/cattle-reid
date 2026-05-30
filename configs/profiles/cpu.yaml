@@ -1,0 +1,27 @@
+# Hardware profile: CPU only (notebook sem GPU)
+# Aplicado automaticamente quando NOVUS_PROFILE=cpu ou quando CUDA não é detectado.
+# Só contém overrides de hardware — parâmetros funcionais ficam em default.yaml.
+#
+# Expectativa de performance (i5-13, 16GB RAM):
+#   - YOLO @ 640px: ~2-5 fps
+#   - DINOv2 embedding: ~500ms-1s por crop
+#   - frame_skip=3 reduz a carga: processa 1 a cada 3 frames
+#   - Para demos/testes com vídeos curtos é viável; produção requer GPU.
+
+models:
+  yolo:
+    half: false
+  classifier:
+    device: cpu
+    half: false
+  embedding:
+    # DINOv2-small: sem HF token, leve (85MB), funciona bem em CPU.
+    # Se mudar de dinov3 → dinov2, reconstruir o FAISS: uv run python -m src.scripts.sync_faiss_from_db
+    model_name: facebook/dinov2-small
+    device: cpu
+    half: false
+
+inference:
+  imgsz: 640
+  batch_size: 4
+  frame_skip: 3

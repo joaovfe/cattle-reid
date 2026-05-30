@@ -32,9 +32,7 @@ async def lifespan(app: FastAPI):
         print(f"[cattle-reid-drone] MinIO S3 target efectivo → {s3_target}", flush=True)
         storage = get_minio_storage()
         if storage is not None:
-            storage.ensure_bucket()
-            storage.ensure_bucket(storage.crops_bucket)
-            storage.ensure_bucket(storage.videos_bucket)
+            storage.ensure_bucket()  # cria todos os buckets configurados (crops, videos, thumbnails, results, reports)
             app.state.minio = storage
             log.info(
                 "MinIO ativo para inferência (bucket principal=%s, results=%s).",

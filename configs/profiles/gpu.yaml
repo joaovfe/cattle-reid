@@ -1,0 +1,21 @@
+# Hardware profile: RTX 3060 (desktop com GPU)
+# Aplicado automaticamente quando NOVUS_PROFILE=gpu ou quando CUDA é detectado.
+# Só contém overrides de hardware — parâmetros funcionais ficam em default.yaml.
+
+models:
+  yolo:
+    half: true
+  classifier:
+    device: cuda
+    half: true
+  embedding:
+    # DINOv3 (gated no HF: requer login + aceite de licença no cartão do modelo).
+    # Após trocar de dinov2 → dinov3, reconstruir o índice FAISS: uv run python -m src.scripts.sync_faiss_from_db
+    model_name: facebook/dinov3-vits16-pretrain-lvd1689m
+    device: cuda
+    half: true
+
+inference:
+  imgsz: 1280
+  batch_size: 16
+  frame_skip: 1

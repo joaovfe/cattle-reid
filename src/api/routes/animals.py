@@ -19,6 +19,12 @@ class AnimalCreate(BaseModel):
     metadata: dict[str, Any] | None = None
 
 
+class AnimalUpdate(BaseModel):
+    external_id: str | None = None
+    name: str | None = None
+    metadata: dict[str, Any] | None = None
+
+
 class AnimalResponse(BaseModel):
     id: int
     external_id: str | None
@@ -96,4 +102,27 @@ async def get_animal(animal_id: int, request: Request):
         animal = result.scalar_one_or_none()
         if animal is None:
             raise HTTPException(status_code=404, detail="Animal not found")
+        return AnimalResponse(id=animal.id, external_id=animal.external_id, name=animal.name, metadata=animal.metadata_)
+
+
+@router.patch("/{animal_id}", response_model=AnimalResponse)
+async def update_animal(animal_id: int, body: AnimalUpdate, request: Request):
+    from core.database.session import async_session_factory
+    from core.database.models import Animal
+    from sqlalchemy import select
+
+    fields = body.model_dump(exclude_unset=True)
+    async with async_session_factory() as session:
+        result = await session.execute(select(Animal).where(Animal.id == animal_id))
+        animal = result.scalar_one_or_none()
+        if animal is None:
+            raise HTTPException(status_code=404, detail="Animal not found")
+        if "external_id" in fields:
+            animal.external_id = fields["external_id"]
+        if "name" in fields:
+            animal.name = fields["name"]
+        if "metadata" in fields:
+            animal.metadata_ = fields["metadata"]
+        await session.commit()
+        await session.refresh(animal)
         return AnimalResponse(id=animal.id, external_id=animal.external_id, name=animal.name, metadata=animal.metadata_)

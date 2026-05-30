@@ -33,6 +33,28 @@ def _read_image(path: Path):  # noqa: ANN201
     return None
 
 
+def _read_image_from_url(url: str):  # noqa: ANN201
+    try:
+        import urllib.request
+
+        import cv2
+        import numpy as np
+
+        with urllib.request.urlopen(url, timeout=10) as resp:
+            data = resp.read()
+        arr = np.frombuffer(data, dtype=np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        return img
+    except Exception:
+        return None
+
+
+def _load_crop(source_path: str):  # noqa: ANN201
+    if source_path.startswith("http://") or source_path.startswith("https://"):
+        return _read_image_from_url(source_path)
+    return _read_image(Path(source_path))
+
+
 async def _sync_from_db(config: dict, faiss_path: str | None, limit_per_animal: int) -> dict:
     from sqlalchemy import select
 
@@ -65,10 +87,7 @@ async def _sync_from_db(config: dict, faiss_path: str | None, limit_per_animal: 
                 continue
             if not source_path:
                 continue
-            path = Path(str(source_path))
-            if not path.exists():
-                continue
-            img = _read_image(path)
+            img = _load_crop(str(source_path))
             if img is None:
                 continue
             emb = encoder.encode_one(img)

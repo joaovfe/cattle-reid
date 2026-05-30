@@ -19,7 +19,11 @@ from fastapi import APIRouter, Request, UploadFile, File, HTTPException, Query
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
-from src.ai.reid.identity_decision import IdentityDecision, aggregate_embeddings
+from src.ai.reid.identity_decision import (
+    IdentityDecision,
+    aggregate_embeddings,
+    merge_duplicate_tracklets,
+)
 from src.ai.metrics.count_metrics import compute_tracklet_evaluation_metrics
 
 router = APIRouter()
@@ -266,6 +270,14 @@ def _sync_video_inference_core(
         aggregated_by_tid[int(tid)] = agg
         animal_id, score = decision.decide(agg, store, top_k=5)
         results.append({"track_id": tid, "animal_id": animal_id, "score": float(score), "num_embeddings": len(embs)})
+
+    # De-dup tracklets desconhecidos antes do auto-enroll: 1 vaca partida em N tracklets
+    # (oclusão / troca de track_id) não deve virar N animais novos. Funde por similaridade.
+    reid_cfg = (config.get("reid", {}) or {})
+    dup_threshold = float(reid_cfg.get("duplicate_tracklet_similarity", 0.80))
+    aggregated_by_tid, results = merge_duplicate_tracklets(
+        aggregated_by_tid, results, similarity_threshold=dup_threshold
+    )
 
     unique_identified = sum(1 for r in results if r.get("animal_id") is not None)
     count = len(results)
@@ -1043,6 +1055,13 @@ async def inference_frames(
         aggregated_by_tid[int(tid)] = agg
         animal_id, score = decision.decide(agg, store, top_k=5)
         tracklet_results.append({"track_id": tid, "animal_id": animal_id, "score": float(score), "num_embeddings": len(embs)})
+
+    # De-dup tracklets desconhecidos antes do auto-enroll (mesma lógica do endpoint /video).
+    reid_cfg = (config.get("reid", {}) or {})
+    dup_threshold = float(reid_cfg.get("duplicate_tracklet_similarity", 0.80))
+    aggregated_by_tid, tracklet_results = merge_duplicate_tracklets(
+        aggregated_by_tid, tracklet_results, similarity_threshold=dup_threshold
+    )
 
     unique_identified = sum(1 for r in tracklet_results if r.get("animal_id") is not None)
     count = len(tracklet_results)

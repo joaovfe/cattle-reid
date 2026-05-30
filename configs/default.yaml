@@ -1,6 +1,11 @@
 # Cattle Re-ID Drone — config padrão
 # Objetivo: mais recall na detecção + re-ID conservador (alvo típico >90% precisão nos matches).
 # Valida com vídeo anotado: --gt_count e revise falsos antes de afrouxar similarity_threshold.
+#
+# Parâmetros de HARDWARE (device, half, imgsz, batch_size, frame_skip, model_name) são
+# definidos em configs/profiles/gpu.yaml ou configs/profiles/cpu.yaml e aplicados
+# automaticamente sobre este arquivo. Configure via NOVUS_PROFILE=gpu|cpu no .env.
+# Se não definido, o perfil é detectado automaticamente (CUDA disponível → gpu, senão → cpu).
 
 app:
   env: development
@@ -16,33 +21,33 @@ models:
     conf_threshold: 0.43   # menor = mais bbox (recall); NMS/refino no re-id/track
     iou_threshold: 0.52    # maior NMS IoU em multidão → menos fusão entre indivíduos próximos
     max_det: 300
-    allowed_class_names: ["cow"]
-    half: true  # fp16 para GPU, mais rápido
+    allowed_class_names: [“cow”]
+    half: false  # sobrescrito pelo perfil de hardware
   classifier:
     # Classificador (ex.: pose). Usado para metadata/eventos; não interfere no Re-ID por embeddings.
     weights: models/cow_pose_classifier.pt
     backend: ultralytics  # ultralytics | torchscript (fallback)
-    device: cuda
-    half: true
+    device: cpu  # sobrescrito pelo perfil de hardware
+    half: false
   embedding:
-    # DINOv3 (gated no HF: login + aceite de licença no cartão do modelo). Reconstruir FAISS após mudar de v2→v3.
-    model_name: facebook/dinov3-vits16-pretrain-lvd1689m
-    device: cuda
+    model_name: facebook/dinov2-small  # sobrescrito pelo perfil de hardware (gpu usa dinov3)
+    device: cpu  # sobrescrito pelo perfil de hardware
     output_size: 384
-    half: true
+    half: false
   faiss:
     index_path: ./core/data/faiss_index
     metric_type: cosine  # cosine or l2
 
 tracking:
   tracker: bytetrack  # bytetrack or deepsort
-  max_age: 35           # segurar associações um pouco mais em oclusões breves
-  iou_threshold: 0.28  # ≥ match com IoU; menor = menos troca de track_id por jitter
+  max_age: 55           # segurar associações por mais tempo em oclusões → menos re-IDs como novos animais
+  iou_threshold: 0.38  # ≥ match com IoU; maior = menos troca de track_id quando a vaca reaparece após oclusão
 
 reid:
   similarity_threshold: 0.4530  # τ calibrado no treino Re-ID (época 16, Recall@1=0.996)
   top1_top2_margin: 0.12     # reforço contra confusão entre galería semelhante
-  min_embeddings_per_tracklet: 6  # média antes de aceitar decisão estável
+  min_embeddings_per_tracklet: 10  # média antes de aceitar decisão estável (corta tracks curtos espúrios)
+  duplicate_tracklet_similarity: 0.80  # τ p/ fundir tracklets desconhecidos duplicados (1 vaca → 1 tracklet)
   aggregate: mean
 
 oriented_crop:
@@ -50,10 +55,10 @@ oriented_crop:
   padding: 0.1  # fraction of bbox
 
 inference:
-  frame_skip: 1  # process every N frames
+  frame_skip: 2  # sobrescrito pelo perfil de hardware
   # Redimensiona o lado longo no YOLO (4K/evitar “NMS time limit exceeded”); null = defeito Ultralytics
-  imgsz: 1280
+  imgsz: 640   # sobrescrito pelo perfil de hardware
   batch_embedding: true
-  batch_size: 16
+  batch_size: 4  # sobrescrito pelo perfil de hardware
   require_classifier: true
   crops_per_tracklet: 4  # mais amostras por tracklet quando min_embeddings aumentou
