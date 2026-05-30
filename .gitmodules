@@ -1,0 +1,3 @@
+[submodule "MetricLearningIdentification"]
+	path = MetricLearningIdentification
+	url = https://github.com/CWOA/MetricLearningIdentification.git
